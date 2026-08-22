@@ -664,8 +664,9 @@ class GasKinematicsFitter:
                 tpl_idx = 1+j
                 kin = self.component[i][tpl_idx]
                 if kin not in self.active_comps[i]:
+                    print(f"ALERTA (COMPONENTE NO ESTA EN ACTIVE COMP)  j:{j}   i:{i}")
                     continue
-
+                print(f"ALERTA (COMPONENTE SI ESTA EN ACTIVE COMP)  j:{j}   i:{i}")
                 f = self.fluxes[i][j]
                 ferr = self.err_fluxes[i][j]
 
