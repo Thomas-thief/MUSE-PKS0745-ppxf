@@ -484,7 +484,7 @@ class GasKinematicsFitter:
                 galaxy, noise, goodpixels, kbin,
                 use_two_components=True
             )
-            return pp2, pp2.gas_flux, pp2.gas_flux_error, pp2.gas_names, pp2.chi2, [1]
+            return pp2.gas_flux, pp2.gas_flux_error, pp2.gas_names, pp2.chi2, [1], pp2.component, pp2.sol
 
         # Compute S/N(Halpha)
         f1 = pp1.gas_flux[idx_Ha1]
@@ -504,7 +504,7 @@ class GasKinematicsFitter:
         idx_Ha1_2 = self._get_Halpha_index(pp2.gas_names, "Halpha_(1)")
         idx_Ha2_2 = self._get_Halpha_index(pp2.gas_names, "Halpha_(2)")
         if (idx_Ha1_2 is None) or (idx_Ha2_2 is None):
-            return pp2, pp2.gas_flux, pp2.gas_flux_error, pp2.gas_names, pp2.chi2, [1]
+            return pp2.gas_flux, pp2.gas_flux_error, pp2.gas_names, pp2.chi2, [1], pp2.component, pp2.sol
 
         # Flux fraction test
         f1_2 = pp2.gas_flux[idx_Ha1_2]
@@ -513,10 +513,10 @@ class GasKinematicsFitter:
 
         # Final decision
         if (sn_Ha >= sn_min) and (dBIC > dBIC_min) and (frac > frac_min):
-            return pp2, pp2.gas_flux, pp2.gas_flux_error, pp2.gas_names, pp2.chi2, [1, 2]
+            return pp2.gas_flux, pp2.gas_flux_error, pp2.gas_names, pp2.chi2, [1, 2], pp2.component, pp2.sol
         else:
-            return pp1, pp1.gas_flux, pp1.gas_flux_error, pp1.gas_names, pp1.chi2, [1]
-#cambiar el return a una sin pp1 y pp2 para que no se guarden tantos mbs 
+            return pp1.gas_flux, pp1.gas_flux_error, pp1.gas_names, pp1.chi2, [1], pp1.component, pp1.sol
+
     # ------------------------------------------------------------------
     # Helper to run 1- or 2-component pPXF
     # ------------------------------------------------------------------
@@ -578,18 +578,17 @@ class GasKinematicsFitter:
             for j in tqdm(range(len(self.s.x)), desc="Fitting gas spaxels")
         )
 
-        self.pp_saved      = [r[0] for r in results]
-        self.fluxes        = [r[1] for r in results]
-        self.err_fluxes    = [r[2] for r in results]
-        self.gas_names_all = [r[3] for r in results]
-        self.chi_all       = [r[4] for r in results]
-        self.active_comps  = [r[5] for r in results]
+        self.fluxes        = np.array([r[0] for r in results])
+        self.err_fluxes    = np.array([r[1] for r in results])
+        self.gas_names_all = np.array([r[2] for r in results])
+        self.chi_all       = np.array([r[3] for r in results])
+        self.active_comps  = np.array([r[4] for r in results])
+        self.component     = np.array([r[5] for r in results])
+        self.sol_all       = np.array([r[6] for r in results])
 
         # del results
         # import gc
         # gc.collect()
-
-        return self.pp_saved
 
 
     # ------------------------------------------------------------------
@@ -616,7 +615,7 @@ class GasKinematicsFitter:
     # ------------------------------------------------------------------
     def process_all_lines(self, header):
 
-        gas_names_global = self.pp_saved[0].gas_names
+        gas_names_global = self.gas_names_all[0]
         line_map = self.build_line_component_map(gas_names_global)
         wavelength_map = self.build_wavelength_map(gas_names_global)
 
@@ -652,27 +651,27 @@ class GasKinematicsFitter:
         dlam = wavelength * self.s.velscale / c_kms
 
         for i in range(npix):
-            pp = self.pp_saved[i]
+            # pp = self.pp_saved[i]
 
-            local_idxs = [j for j,g in enumerate(pp.gas_names)
+            local_idxs = [j for j,g in enumerate(self.gas_names_all[i])
                           if g.startswith(line_name)]
             if len(local_idxs)==0:
                 continue
 
             for j in local_idxs:
-                comp = int(pp.gas_names[j].split("(")[1].split(")")[0])
+                comp = int(self.gas_names_all[i][j].split("(")[1].split(")")[0])
 
                 tpl_idx = 1+j
-                kin = pp.component[tpl_idx]
+                kin = self.component[i][tpl_idx]
                 if kin not in self.active_comps[i]:
                     continue
 
-                f = pp.gas_flux[j]
-                ferr = pp.gas_flux_error[j]
+                f = self.fluxes[i][j]
+                ferr = self.err_fluxes[i][j]
 
                 if f>0:
                     f_val = f*dlam
-                    f_err = ferr*np.sqrt(pp.chi2)
+                    f_err = ferr*np.sqrt(self.chi_all[i])
                 else:
                     f_val = 0.0
                     f_err = 0.0
@@ -707,9 +706,9 @@ class GasKinematicsFitter:
         sigmap = np.full(npix, np.nan)
 
         for i in range(npix):
-            pp = self.pp_saved[i]
+            #pp = self.pp_saved[i]
 
-            local_idxs = [j for j,g in enumerate(pp.gas_names)
+            local_idxs = [j for j,g in enumerate(self.gas_names_all[i])
                           if g.startswith(line_name)]
             if len(local_idxs)==0:
                 continue
@@ -718,16 +717,16 @@ class GasKinematicsFitter:
 
             for j in local_idxs:
                 tpl_idx = 1+j
-                kin = pp.component[tpl_idx]
+                kin = self.component[i][tpl_idx]
                 if kin not in self.active_comps[i]:
                     continue
 
-                f = pp.gas_flux[j]
+                f = self.fluxes[i][j]
                 if f<=0:
                     continue
 
-                v = pp.sol[kin][0]
-                s = pp.sol[kin][1]
+                v = self.sol_all[i][kin][0]
+                s = self.sol_all[i][kin][1]
                 f_list.append(f); v_list.append(v); s_list.append(s)
 
             if len(f_list)==0:
