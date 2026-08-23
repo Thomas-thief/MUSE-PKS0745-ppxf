@@ -432,7 +432,18 @@ class GasKinematicsFitter:
         idx = np.where(names == tag)[0]
         return idx[0] if len(idx) > 0 else None
 
-
+    @staticmethod
+    def _get_BIC_static(pp):
+        chi2 = pp.chi2 * pp.dof
+        k = pp.npix - pp.dof
+        N = pp.npix
+        return chi2 + k * np.log(N)
+ 
+    @staticmethod
+    def _get_Halpha_index_static(names, tag="Halpha_(1)"):
+        idx = np.where(names == tag)[0]
+        return idx[0] if len(idx) > 0 else None
+ 
     # ------------------------------------------------------------------
     # Fit a single spaxel
     # ------------------------------------------------------------------
@@ -517,6 +528,81 @@ class GasKinematicsFitter:
         else:
             return pp1.gas_flux, pp1.gas_flux_error, pp1.gas_names, pp1.chi2, [1], pp1.component, pp1.sol
 
+    @staticmethod
+    def _fit_single_spaxel_static(
+        j, spectra, variance, ln_lam_temp, lam_gal,
+        bin_num, optimal_templates,
+        gas_templates_1, gas_names_1,
+        gas_templates_2, gas_names_2,
+        n_lines, velbin, sigbin, h3, h4,
+        velscale, lam_temp,
+        sn_min=80, dBIC_min=7, frac_min=0.1
+    ):
+        # Extract spectrum + noise
+        galaxy = np.asarray(spectra[:, j], float)
+        galaxy = np.asarray(ph.replace_nan(galaxy, np.nanmean(galaxy)), float)
+ 
+        variance_j = np.asarray(variance[:, j], float)
+        lam_range_temp = np.exp(ln_lam_temp[[0, -1]])
+        lam_lin = np.linspace(lam_range_temp[0], lam_range_temp[1], len(variance_j))
+        variance_log = np.interp(lam_gal, lam_lin, variance_j)
+        noise = np.sqrt(variance_log)
+ 
+        # Stellar template from its Voronoi bin
+        kbin = bin_num[j]
+        template = np.asarray(optimal_templates[:, kbin], float)
+ 
+        # Masks
+        mask = (~((lam_gal > 7500) & (lam_gal < 7750)) &
+                ~((lam_gal > 6810) & (lam_gal < 6900)))
+        goodpixels = np.where(mask)[0]
+ 
+        vk, sk, h3k, h4k = velbin[kbin], sigbin[kbin], h3[kbin], h4[kbin]
+ 
+        # -------------------------- 1-component fit -------------------------
+        pp1 = GasKinematicsFitter._run_ppxf_fit_static(
+            template, gas_templates_1, gas_names_1,
+            galaxy, noise, goodpixels, False,
+            n_lines, vk, sk, h3k, h4k, velscale, lam_gal, lam_temp
+        )
+        BIC1 = GasKinematicsFitter._get_BIC_static(pp1)
+ 
+        idx_Ha1 = GasKinematicsFitter._get_Halpha_index_static(pp1.gas_names, "Halpha_(1)")
+        if idx_Ha1 is None:
+            pp2 = GasKinematicsFitter._run_ppxf_fit_static(
+                template, gas_templates_2, gas_names_2,
+                galaxy, noise, goodpixels, True,
+                n_lines, vk, sk, h3k, h4k, velscale, lam_gal, lam_temp
+            )
+            return pp2.gas_flux, pp2.gas_flux_error, pp2.gas_names, pp2.chi2, [1], pp2.component, pp2.sol
+ 
+        f1 = pp1.gas_flux[idx_Ha1]
+        e1 = pp1.gas_flux_error[idx_Ha1]
+        sn_Ha = f1 / e1 if e1 > 0 else 0.0
+ 
+        # -------------------------- 2-component fit -------------------------
+        pp2 = GasKinematicsFitter._run_ppxf_fit_static(
+            template, gas_templates_2, gas_names_2,
+            galaxy, noise, goodpixels, True,
+            n_lines, vk, sk, h3k, h4k, velscale, lam_gal, lam_temp
+        )
+        BIC2 = GasKinematicsFitter._get_BIC_static(pp2)
+        dBIC = BIC1 - BIC2
+ 
+        idx_Ha1_2 = GasKinematicsFitter._get_Halpha_index_static(pp2.gas_names, "Halpha_(1)")
+        idx_Ha2_2 = GasKinematicsFitter._get_Halpha_index_static(pp2.gas_names, "Halpha_(2)")
+        if (idx_Ha1_2 is None) or (idx_Ha2_2 is None):
+            return pp2.gas_flux, pp2.gas_flux_error, pp2.gas_names, pp2.chi2, [1], pp2.component, pp2.sol
+ 
+        f1_2 = pp2.gas_flux[idx_Ha1_2]
+        f2_2 = pp2.gas_flux[idx_Ha2_2]
+        frac = f2_2 / (f1_2 + f2_2) if (f1_2 + f2_2) > 0 else 0.0
+ 
+        if (sn_Ha >= sn_min) and (dBIC > dBIC_min) and (frac > frac_min):
+            return pp2.gas_flux, pp2.gas_flux_error, pp2.gas_names, pp2.chi2, [1, 2], pp2.component, pp2.sol
+        else:
+            return pp1.gas_flux, pp1.gas_flux_error, pp1.gas_names, pp1.chi2, [1], pp1.component, pp1.sol
+ 
     # ------------------------------------------------------------------
     # Helper to run 1- or 2-component pPXF
     # ------------------------------------------------------------------
@@ -568,28 +654,99 @@ class GasKinematicsFitter:
 
         return pp
 
+    @staticmethod
+    def _run_ppxf_fit_static(template, gas_templates, gas_names,
+                              galaxy, noise, goodpixels,
+                              use_two_components,
+                              n_lines, velbin_k, sigbin_k, h3_k, h4_k,
+                              velscale, lam_gal, lam_temp):
+ 
+        if use_two_components:
+            component = [0] + [1] * n_lines + [2] * n_lines
+            moments = [-4, 2, 2]
+            start = [
+                [velbin_k, sigbin_k, h3_k, h4_k],
+                [0.0, 50.0],
+                [0.0, 180.0]
+            ]
+            fixed = [[1, 1, 1, 1], [0, 0], [0, 0]]
+        else:
+            component = [0] + [1] * n_lines
+            moments = [-4, 2]
+            start = [
+                [velbin_k, sigbin_k, h3_k, h4_k],
+                [0.0, 50.0]
+            ]
+            fixed = [[1, 1, 1, 1], [0, 0]]
+ 
+        gas_comp_flag = np.array(component) > 0
+ 
+        pp = ppxf(
+            templates=np.column_stack([template, gas_templates]),
+            galaxy=galaxy,
+            noise=noise,
+            velscale=velscale,
+            start=start,
+            fixed=fixed,
+            goodpixels=goodpixels,
+            moments=moments,
+            component=component,
+            gas_component=gas_comp_flag,
+            gas_names=gas_names,
+            lam=lam_gal,
+            lam_temp=lam_temp,
+            degree=-1, mdegree=10,
+            quiet=True, plot=False
+        )
+        return pp
+ 
 
     # ------------------------------------------------------------------
     # Run ALL spaxels in parallel
     # ------------------------------------------------------------------
+    # def fit_cube(self, n_jobs=-1):
+    #     results = Parallel(n_jobs=n_jobs, backend="loky", max_nbytes="1M", batch_size=10)(
+    #         delayed(self._fit_single_spaxel)(j)
+    #         for j in tqdm(range(len(self.s.x)), desc="Fitting gas spaxels")
+    #     )
+
+    #     self.fluxes        = np.array([r[0] for r in results])
+    #     self.err_fluxes    = np.array([r[1] for r in results])
+    #     self.gas_names_all = np.array([r[2] for r in results])
+    #     self.chi_all       = np.array([r[3] for r in results])
+    #     self.active_comps  = np.array([r[4] for r in results])
+    #     self.component     = np.array([r[5] for r in results])
+    #     self.sol_all       = np.array([r[6] for r in results])
+
     def fit_cube(self, n_jobs=-1):
-        results = Parallel(n_jobs=n_jobs, backend="threading")(
-            delayed(self._fit_single_spaxel)(j)
+        n_lines = len(self.gas_names_base)
+ 
+        results = Parallel(n_jobs=n_jobs, backend="loky", max_nbytes="1M", batch_size=10)(
+            delayed(GasKinematicsFitter._fit_single_spaxel_static)(
+                j,
+                self.s.spectra, self.s.variance, self.sps.ln_lam_temp,
+                self.lam_gal, self.bin_num, self.optimal_templates,
+                self.gas_templates_1, self.gas_names_1,
+                self.gas_templates_2, self.gas_names_2,
+                n_lines, self.velbin, self.sigbin, self.h3, self.h4,
+                self.s.velscale, self.sps.lam_temp
+            )
             for j in tqdm(range(len(self.s.x)), desc="Fitting gas spaxels")
         )
-
-        self.fluxes        = np.array([r[0] for r in results])
-        self.err_fluxes    = np.array([r[1] for r in results])
-        self.gas_names_all = np.array([r[2] for r in results])
-        self.chi_all       = np.array([r[3] for r in results])
-        self.active_comps  = np.array([r[4] for r in results])
-        self.component     = np.array([r[5] for r in results])
-        self.sol_all       = np.array([r[6] for r in results])
-
-        # del results
-        # import gc
-        # gc.collect()
-
+ 
+        # dtype=object: cada spaxel puede tener 1 o 2 componentes activos,
+        # así que gas_flux/gas_names/component/sol tienen largo VARIABLE
+        # entre spaxels. numpy ya no permite construir un array regular
+        # a partir de secuencias de largo distinto (ValueError: inhomogeneous
+        # shape), así que hay que forzar dtype=object explícitamente.
+        self.fluxes        = np.array([r[0] for r in results], dtype=object)
+        self.err_fluxes    = np.array([r[1] for r in results], dtype=object)
+        self.gas_names_all = np.array([r[2] for r in results], dtype=object)
+        self.chi_all       = np.array([r[3] for r in results])          # escalar por spaxel -> homogéneo, ok
+        self.active_comps  = np.array([r[4] for r in results], dtype=object)
+        self.component     = np.array([r[5] for r in results], dtype=object)
+        self.sol_all       = np.array([r[6] for r in results], dtype=object)
+ 
 
     # ------------------------------------------------------------------
     # Build utility maps
@@ -664,9 +821,8 @@ class GasKinematicsFitter:
                 tpl_idx = 1+j
                 kin = self.component[i][tpl_idx]
                 if kin not in self.active_comps[i]:
-                    print(f"ALERTA (COMPONENTE NO ESTA EN ACTIVE COMP)  j:{j}   i:{i}")
                     continue
-                print(f"ALERTA (COMPONENTE SI ESTA EN ACTIVE COMP)  j:{j}   i:{i}")
+                
                 f = self.fluxes[i][j]
                 ferr = self.err_fluxes[i][j]
 
@@ -753,34 +909,51 @@ class GasKinematicsFitter:
     def _save_fits(self, name, data, header):
         fits.writeto(name+".fits", data=data, header=header, overwrite=True)
 
-
-
         # ===================================================================
     # --- NEW: Run a PURE 1-GAUSSIAN FIT for all spaxels ----------------
     # ===================================================================
+    # def fit_cube_one_component(self, n_jobs=-1):
+    #     """
+    #     Run pPXF for each spaxel using ONLY ONE GAS KINEMATIC COMPONENT.
+    #     Useful for producing single-Gaussian maps (flux, vel, sigma).
+    #     """
+
+    #     results = Parallel(n_jobs=n_jobs, backend="loky")(
+    #         delayed(self._fit_single_gaussian)(j)
+    #         for j in tqdm(range(len(self.s.x)), desc="1-Gaussian gas fits")
+    #     )
+
+    #     self.pp_1g      = [r[0] for r in results]
+    #     self.flux_1g    = [r[1] for r in results]
+    #     self.err_1g     = [r[2] for r in results]
+    #     self.vel_1g     = [r[3] for r in results]
+    #     self.sig_1g     = [r[4] for r in results]
+
+    #     # del results
+    #     # import gc
+    #     # gc.collect()
+
+    #     return self.pp_1g
     def fit_cube_one_component(self, n_jobs=-1):
         """
         Run pPXF for each spaxel using ONLY ONE GAS KINEMATIC COMPONENT.
         Useful for producing single-Gaussian maps (flux, vel, sigma).
         """
-
-        results = Parallel(n_jobs=n_jobs, backend="loky")(
-            delayed(self._fit_single_gaussian)(j)
+        results = Parallel(n_jobs=n_jobs, backend="loky", max_nbytes="1M", batch_size=10)(
+            delayed(GasKinematicsFitter._fit_single_gaussian_static)(
+                j, self.s.spectra, self.s.variance, self.sps.ln_lam_temp,
+                self.lam_gal, self.bin_num, self.optimal_templates,
+                self.gas_templates_1, self.gas_names_1,
+                self.velbin, self.sigbin, self.h3, self.h4,
+                self.s.velscale, self.sps.lam_temp
+            )
             for j in tqdm(range(len(self.s.x)), desc="1-Gaussian gas fits")
         )
-
-        self.pp_1g      = [r[0] for r in results]
-        self.flux_1g    = [r[1] for r in results]
-        self.err_1g     = [r[2] for r in results]
-        self.vel_1g     = [r[3] for r in results]
-        self.sig_1g     = [r[4] for r in results]
-
-        # del results
-        # import gc
-        # gc.collect()
-
-        return self.pp_1g
-
+ 
+        # Lista de dicts {line_name: (flux, err, vel, sig)}, uno por spaxel.
+        # Mucho más liviano que guardar miles de objetos pp completos.
+        self.line_results_1g = results
+        return self.line_results_1g
 
     # ===================================================================
     # --- NEW: Fit a spaxel with ONLY ONE GAUSSIAN ----------------------
@@ -860,7 +1033,88 @@ class GasKinematicsFitter:
         except:
             flux, err, vel, sig = 0, 0, np.nan, np.nan
 
-        return pp, flux, err, vel, sig  
+        return pp, flux, err, vel, sig
+
+    @staticmethod
+    def _fit_single_gaussian_static(
+        j, spectra, variance, ln_lam_temp, lam_gal,
+        bin_num, optimal_templates,
+        gas_templates_1, gas_names_1,
+        velbin, sigbin, h3, h4, velscale, lam_temp
+    ):
+        # 1. Extract spectrum & noise
+        galaxy = np.asarray(spectra[:, j], float)
+        galaxy = np.asarray(ph.replace_nan(galaxy, np.nanmean(galaxy)), float)
+ 
+        variance_j = np.asarray(variance[:, j], float)
+        lam_range_temp = np.exp(ln_lam_temp[[0, -1]])
+        lam_lin = np.linspace(lam_range_temp[0], lam_range_temp[1], len(variance_j))
+ 
+        variance_log = np.interp(lam_gal, lam_lin, variance_j)
+        noise = np.sqrt(np.abs(variance_log))
+        noise = np.asarray(ph.replace_nan(noise, np.nanmean(noise)), float)
+ 
+        # 2. Stellar template (Voronoi bin)
+        kbin = bin_num[j]
+        template = np.asarray(optimal_templates[:, kbin], float)
+ 
+        # 3. Mask
+        mask = (~((lam_gal > 7500) & (lam_gal < 7750)) &
+                ~((lam_gal > 6810) & (lam_gal < 6900)))
+        goodpixels = np.where(mask)[0]
+ 
+        # 4. Run a 1-component GAS fit
+        n_lines = len(gas_names_1)
+        component = [0] + [1] * n_lines
+        moments = [-4, 2]
+        vk, sk, h3k, h4k = velbin[kbin], sigbin[kbin], h3[kbin], h4[kbin]
+        start = [
+            [vk, sk, h3k, h4k],
+            [vk, 50.0]
+        ]
+        fixed = [[1, 1, 1, 1], [0, 0]]
+        gas_comp_flag = np.array(component) > 0
+ 
+        pp = ppxf(
+            templates=np.column_stack([template, gas_templates_1]),
+            galaxy=galaxy,
+            noise=noise,
+            velscale=velscale,
+            start=start,
+            fixed=fixed,
+            goodpixels=goodpixels,
+            moments=moments,
+            component=component,
+            gas_component=gas_comp_flag,
+            gas_names=gas_names_1,
+            lam=lam_gal,
+            lam_temp=lam_temp,
+            degree=8, mdegree=0,
+            quiet=True, plot=False
+        )
+ 
+        # 5. Extract flux/err/vel/sigma for EVERY line, right here.
+        #    Devolvemos un dict liviano en vez del objeto pp completo.
+        line_names = sorted(set(name.split("_(")[0] for name in gas_names_1))
+        line_results = {}
+        for line in line_names:
+            target = f"{line}_(1)"
+            idx = np.where(pp.gas_names == target)[0]
+            if len(idx) == 0:
+                line_results[line] = (0.0, 0.0, np.nan, np.nan)
+                continue
+            idx = idx[0]
+            try:
+                flux = pp.gas_flux[idx]
+                err = pp.gas_flux_error[idx]
+                vel = pp.sol[1][0]
+                sig = pp.sol[1][1]
+            except Exception:
+                flux, err, vel, sig = 0.0, 0.0, np.nan, np.nan
+            line_results[line] = (flux, err, vel, sig)
+ 
+        return line_results
+ 
 # ----------------------------------------------------------------------
 # Extract flux, err, vel, sigma for a given line from 1-Gaussian fit
 # ----------------------------------------------------------------------
@@ -890,51 +1144,89 @@ class GasKinematicsFitter:
     # --- NEW: Save 1-Gaussian RESULTS AS 2D MAPS ------------------------
     # ===================================================================
 
-    def save_all_emission_lines_one_component(self, header, prefix="Gas1G_"):
+    # def save_all_emission_lines_one_component(self, header, prefix="Gas1G_"):
 
+    #     nx = self.s.header["NAXIS1"]
+    #     ny = self.s.header["NAXIS2"]
+    #     npix = nx * ny
+
+    #     # Base line names, e.g. "Halpha", "Hbeta", "OIII5007", "NII6583", ...
+    #     line_list = [ name.split("_(")[0] for name in self.gas_names_1 ]
+
+    #     # Unique lines only
+    #     line_list = sorted(list(set(line_list)))
+
+    #     print("\nSaving single-Gaussian maps for:")
+    #     for line in line_list:
+    #         print("  →", line)
+
+    #     # Loop over every emission line
+    #     for line in line_list:
+
+    #         flux_map  = np.zeros(npix)
+    #         err_map   = np.zeros(npix)
+    #         vel_map   = np.full(npix, np.nan)
+    #         sig_map   = np.full(npix, np.nan)
+
+    #         # Fill maps
+    #         for i in range(npix):
+
+    #             pp = self.pp_1g[i]
+    #             f, e, v, s = self._extract_line_from_pp_1g(pp, line)
+
+    #             flux_map[i] = f
+    #             err_map[i]  = e
+    #             vel_map[i]  = v
+    #             sig_map[i]  = s
+
+    #         # Reshape into 2D images
+    #         flux_map = flux_map.reshape(nx, ny)
+    #         err_map  = err_map.reshape(nx, ny)
+    #         vel_map  = vel_map.reshape(nx, ny)
+    #         sig_map  = sig_map.reshape(nx, ny)
+
+    #         # Save to FITS
+    #         self._save_fits(self.s.outfolder + f"{prefix}{line}_flux",     flux_map, header)
+    #         self._save_fits(self.s.outfolder + f"{prefix}{line}_flux_err", err_map,  header)
+    #         self._save_fits(self.s.outfolder + f"{prefix}{line}_vel",      vel_map,  header)
+    #         self._save_fits(self.s.outfolder + f"{prefix}{line}_sigma",    sig_map,  header)
+
+    #     print("\n✓ All emission-line maps saved.")
+    
+    def save_all_emission_lines_one_component(self, header, prefix="Gas1G_"):
+ 
         nx = self.s.header["NAXIS1"]
         ny = self.s.header["NAXIS2"]
         npix = nx * ny
-
-        # Base line names, e.g. "Halpha", "Hbeta", "OIII5007", "NII6583", ...
-        line_list = [ name.split("_(")[0] for name in self.gas_names_1 ]
-
-        # Unique lines only
-        line_list = sorted(list(set(line_list)))
-
+ 
+        line_list = sorted(set(name.split("_(")[0] for name in self.gas_names_1))
+ 
         print("\nSaving single-Gaussian maps for:")
         for line in line_list:
             print("  →", line)
-
-        # Loop over every emission line
+ 
         for line in line_list:
-
-            flux_map  = np.zeros(npix)
-            err_map   = np.zeros(npix)
-            vel_map   = np.full(npix, np.nan)
-            sig_map   = np.full(npix, np.nan)
-
-            # Fill maps
+ 
+            flux_map = np.zeros(npix)
+            err_map = np.zeros(npix)
+            vel_map = np.full(npix, np.nan)
+            sig_map = np.full(npix, np.nan)
+ 
             for i in range(npix):
-
-                pp = self.pp_1g[i]
-                f, e, v, s = self._extract_line_from_pp_1g(pp, line)
-
+                f, e, v, s = self.line_results_1g[i].get(line, (0.0, 0.0, np.nan, np.nan))
                 flux_map[i] = f
-                err_map[i]  = e
-                vel_map[i]  = v
-                sig_map[i]  = s
-
-            # Reshape into 2D images
+                err_map[i] = e
+                vel_map[i] = v
+                sig_map[i] = s
+ 
             flux_map = flux_map.reshape(nx, ny)
-            err_map  = err_map.reshape(nx, ny)
-            vel_map  = vel_map.reshape(nx, ny)
-            sig_map  = sig_map.reshape(nx, ny)
-
-            # Save to FITS
-            self._save_fits(self.s.outfolder + f"{prefix}{line}_flux",     flux_map, header)
-            self._save_fits(self.s.outfolder + f"{prefix}{line}_flux_err", err_map,  header)
-            self._save_fits(self.s.outfolder + f"{prefix}{line}_vel",      vel_map,  header)
-            self._save_fits(self.s.outfolder + f"{prefix}{line}_sigma",    sig_map,  header)
-
+            err_map = err_map.reshape(nx, ny)
+            vel_map = vel_map.reshape(nx, ny)
+            sig_map = sig_map.reshape(nx, ny)
+ 
+            self._save_fits(self.s.outfolder + f"{prefix}{line}_flux", flux_map, header)
+            self._save_fits(self.s.outfolder + f"{prefix}{line}_flux_err", err_map, header)
+            self._save_fits(self.s.outfolder + f"{prefix}{line}_vel", vel_map, header)
+            self._save_fits(self.s.outfolder + f"{prefix}{line}_sigma", sig_map, header)
+ 
         print("\n✓ All emission-line maps saved.")
