@@ -342,7 +342,7 @@ def determine_mask(ln_lam, lam_range_temp, redshift=0, width=800):
     :return: boolean vector mask to be used as input for pPXF
 
     """
-     #   wave = [3968.59, 3869.86, 4687.015, 5877.243, 7319, 7330,9069 ,9532, 7135.8,5755, 4363 ,7291.47,7323.89,5197.90,5200.26]  # vacuum wavelengths
+    #   wave = [3968.59, 3869.86, 4687.015, 5877.243, 7319, 7330,9069 ,9532, 7135.8,5755, 4363 ,7291.47,7323.89,5197.90,5200.26]  # vacuum wavelengths
     #  -----[OII]-----    Hdelta   Hgamma   Hbeta   -----[OIII]-----   [OI]    -----[NII]-----   Halpha   -----[SII]-----
     lines = np.array([3726.03, 3728.82, 4101.76, 4340.47, 4861.33, 4958.92, 5006.84, 6300.30, 6363.78, 6548.03, 6583.41, 6562.80, 6716.47, 6730.85,7291.47,7323.89,5197.90,5200.26])
     # width/2 of masked gas emission region in km/s

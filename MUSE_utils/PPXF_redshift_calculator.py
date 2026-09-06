@@ -5,12 +5,14 @@ from astropy.table import Table
 import astropy.units as u
 #import pyregion
 import math
+
 import pandas as pd
 
 import os
 from glob import glob
 
 #from tqdm import tqdm
+
 
 from mpdaf.obj import Cube, WaveCoord
 from mpdaf.drs import PixTable
@@ -27,9 +29,17 @@ import ppxf.sps_util as lib
 from IPython.display import display, HTML
 display(HTML("<style>.container { width:100% !important; }</style>"))
 
+from astropy.io import fits
+import ppxf.ppxf_util as util
+
+import numpy as np
+from astropy.io import fits
+from astropy.convolution import Gaussian1DKernel, convolve
+from astropy.convolution import Gaussian2DKernel, convolve
+
 
 ##########################################################################
-# CLASS 1 - Data cube reader (your original working code)
+# CLASS 1 — Data cube reader (your original working code)
 ##########################################################################
 
 class ReadDataSpectrum:
@@ -41,15 +51,15 @@ class ReadDataSpectrum:
             hdu = fits.open(filename)
             head = hdu[1].header
             cube = hdu[1].data  
-        #   cubevar = hdu[2].data 
+            cubevar = hdu[2].data 
 
             # Only use the specified rest-frame wavelength range
             wave = head['CRVAL1'] + head['CDELT1']*np.arange(cube.shape[0])
 
             self.cube = cube
-        #   self.cubevar = cubevar
+            self.cubevar = cubevar
             self.wave = wave
-            self.fwhm_gal = 2.62  # Median FWHM = 2.62Å. Range: 2.51--2.88 (ESO instrument manual). 
+            self.fwhm_gal = 2.55  # Median FWHM = 2.62Å. Range: 2.51--2.88 (ESO instrument manual). 
             self.pixsize = 0.2
 
             # wavelength selection in rest-frame
@@ -57,11 +67,9 @@ class ReadDataSpectrum:
             w = (wave > lam_range[0]) & (wave < lam_range[1])
             wave = wave[w]
             cube = self.cube[w, ...]
+            cubevar = self.cubevar[w, ...]
 
             signal = cube
-
-            # brightest spaxel
-            jm = np.argmax(signal)
 
             # log-rebinning
             c = 299792.458
@@ -72,7 +80,11 @@ class ReadDataSpectrum:
                 lam_range_temp, cube, velscale=velscale
             )
 
+            var_log, _, _ = util.log_rebin(lam_range_temp,cubevar,velscale=velscale)
+            noise_log = np.sqrt(var_log)
+
             self.spectra = spectra
+            self.noise = noise_log
             self.signal = signal.ravel()
             self.velscale = velscale
             self.ln_lam_gal = ln_lam_gal
@@ -97,9 +109,11 @@ class CubeUtils:
 
     # --------------------------------------------------------------
     @staticmethod
-    def subtract_peak_spectrum(z, filename):
+    def subtract_peak_spectrum(z, filename, radius):
         """Your original working extraction method intact."""
         cube = Cube(filename, ext=1)
+        var = Cube(filename, ext=2)
+
         header = cube.data_header
         wcs = WCS(header, naxis=2)
 
@@ -109,6 +123,12 @@ class CubeUtils:
         wavelength = np.linspace(w_min, w_min + dw * nPixels, nPixels, endpoint=False)
 
         image = cube.get_band_image('Johnson_V')
+
+        kernel = Gaussian2DKernel(x_stddev=5, y_stddev=5)  # smoothing in pixels
+      #  kernel = Gaussian2DKernel(x_stddev=1, y_stddev=1)  # smoothing in pixels
+
+        image.data = convolve(image.data, kernel, boundary='extend')
+
         max_index, val = CubeUtils.find_max_index(image.data)
 
         coor_x = max_index[1] + 1
@@ -117,17 +137,24 @@ class CubeUtils:
         world = wcs.wcs_pix2world(coor_x, coor_y, 1)
         subcube = cube.subcube_circle_aperture(
             center=(float(world[1]), float(world[0])),
-            radius=1
+            radius=radius
         )
 
+        subcube_var = var.subcube_circle_aperture(
+            center=(float(world[1]), float(world[0])),
+            radius=radius
+        )
+
+
         spec = subcube.sum(axis=(1, 2))
+        spec_var = subcube_var.sum(axis=(1, 2))
 
         # Plot identical to your original
         f = plt.figure(figsize=(15, 5))
         f.add_subplot(1, 2, 1)
         vmin0, vmax0 = np.percentile(image.data[~np.isnan(image.data)], (1, 99.5))
         plt.imshow(image.data, origin='lower', cmap='inferno', vmin=vmin0, vmax=vmax0)
-        circ = plt.Circle((coor_x - 1, coor_y - 1), radius=2.5,
+        circ = plt.Circle((coor_x - 1, coor_y - 1), radius=radius,
                           linewidth=2, edgecolor='darkgoldenrod', fill=False)
         plt.gca().add_artist(circ)
 
@@ -136,8 +163,31 @@ class CubeUtils:
         plt.tight_layout()
         plt.show()
 
-        out = filename.replace(".fits", "").replace(".FITS", "") + "_SPEC_CENTER.fits"
+        #out = filename.replace(".fits", "").replace(".FITS", "") + "_SPEC_CENTER.fits"
+
+        # save
+        base = os.path.splitext(filename)[0]
+        out = base + "_SPEC_CENTER.fits"
+
+        # MPDAF writes the spectrum and its correct 1D spectral WCS
         spec.write(out)
+
+        # Add variance as an extra extension
+        with fits.open(out, mode="update") as hdul:
+            var_data = np.asarray(
+                spec_var.data.filled(np.nan),
+                dtype=np.float32
+            )
+
+            hdul.append(
+                fits.ImageHDU(
+                    data=var_data,
+                    name="VAR"
+                )
+            )
+
+            hdul.flush()
+
         print(f"Spectrum written to {out}")
 
 
@@ -169,7 +219,7 @@ class StellarKinematics:
 
         mask = mask0.copy()
         pp = ppxf(templates, galaxy, noise, velscale, start,
-                  moments=2, degree=10, mdegree=-1,
+                  moments=4, degree=12, mdegree=-1,
                   lam=lam, lam_temp=lam_temp,
                   mask=mask, quiet=quiet)
 
@@ -177,15 +227,20 @@ class StellarKinematics:
             plt.figure(figsize=(20, 5))
             plt.subplot(121)
             pp.plot()
+
+            ax1 = plt.gca()
+            ylim = ax1.get_ylim()
+
             plt.title("Initial fit")
 
         mask = self.clip_outliers(galaxy, pp.bestfit, mask)
         mask &= mask0
 
         pp = ppxf(templates, galaxy, noise, velscale, start,
-                  moments=2, degree=10, mdegree=-1,
+                  moments=4, degree=12, mdegree=-1,
                   lam=lam, lam_temp=lam_temp,
-                  mask=mask, quiet=quiet, clean=True)
+                  mask=mask, quiet=quiet, clean=False, trig=1)
+
 
         pp.optimal_template = templates.reshape(templates.shape[0], -1) @ pp.weights
 
@@ -195,13 +250,113 @@ class StellarKinematics:
         if plot:
             plt.subplot(122)
             pp.plot()
-            plt.show()
+            plt.title("Final fit")
+
+            # Restaurar mismos límites
+            ax2 = plt.gca()
+            ax2.set_ylim(ylim)
+
         return pp
 
     # --------------------------------------------------------------
-    def setup_stellar_kinematics(self, start, redshift):
+    def setup_stellar_kinematics(self, start, redshift_0,width):
         """Your original working method — unchanged."""
-        
+
+        def create_emission_mask(
+            lam_gal,
+            redshift,
+            width=10
+        ):
+
+            emission_lines = np.array([
+                # [O II]
+                3726.03,
+                3728.82,
+
+                # Balmer series
+                3797.90,   # H10
+                3835.39,   # H9
+                3889.05,   # H8 + He I
+                3970.07,   # Hε
+                4101.74,   # Hδ
+                4340.47,   # Hγ
+                4861.33,   # Hβ
+                6562.80,   # Hα
+                6565.80,   # Hα extra
+
+                # Helium
+            #  3888.65,
+            #    4471.48,
+            #    4685.68,
+                5875.62,
+                7065.19,
+
+                # Oxygen
+                4363.21,   # [O III]
+                4958.91,
+                5006.84,
+                6300.30,
+                6363.78,
+
+                # Nitrogen
+               # 5197.90,
+                5200.26,
+                5754.59,
+                6548.05,
+                6583.45,
+                6587.45, # extra for broad emission lines
+
+                # Sulfur
+                6312.10,
+                6717.44,
+                6730.82,
+
+                # [S III]
+                9068.60,
+                9530.60,
+
+                # Neon
+
+                # Argon
+                7135.79,
+                7751.11,
+
+
+                # Calcium forbidden
+                7291.47,
+                7323.89 
+            ])
+
+            mask = np.ones_like(lam_gal, dtype=bool)
+
+            for line in emission_lines:
+
+                mask &= np.abs(lam_gal - line) > width
+
+            return mask
+
+        def sanitize_spectrum_1d(spectrum, min_frac=1e-4):
+
+            s = np.asarray(spectrum, float).copy()
+
+            # Replace NaNs / infs
+            if np.any(~np.isfinite(s)):
+                good = np.isfinite(s)
+                if good.any():
+                    s[~good] = np.nanmedian(s[good])
+                else:
+                    s[:] = 0.0
+
+            # Define small positive floor
+            med = np.nanmedian(s)
+            floor = min_frac * med if med > 0 else min_frac
+
+            # Remove negative or zero values
+            s[s <= 0] = floor
+
+            return s
+
+
         print("Setting up SPS templates…")
 
         sps_name = 'emiles'
@@ -215,7 +370,7 @@ class StellarKinematics:
 
         s = self.s
 
-        FWHM_gal = 2.62
+        FWHM_gal = 2.62/(1+redshift_0)
         sps = lib.sps_lib(filename, s.velscale, FWHM_gal, norm_range=[5070, 5950])
 
         npix, *reg_dim = sps.templates.shape
@@ -223,11 +378,30 @@ class StellarKinematics:
         sps.templates /= np.median(sps.templates)
 
         lam_range_temp = np.exp(sps.ln_lam_temp[[0, -1]])
-        mask0 = util.determine_mask(s.ln_lam_gal, lam_range_temp, width=1000)
+ #       mask0 = util.determine_mask(s.ln_lam_gal, lam_range_temp, width=width)
+
+        
         lam_gal = np.exp(s.ln_lam_gal)
 
+        # The MUSE wavelengths are in vacuum, while the MILES ones are in air. 
+        # For a rigorous treatment, the SDSS vacuum wavelengths should be converted into air wavelengths and the spectra should be resampled. 
+        # To avoid resampling, given that the wavelength dependence of the correction is very weak, I approximate it with a constant factor.
+
+        lam_gal *= np.median(util.vac_to_air(lam_gal)/lam_gal)
+
+        mask_emission = create_emission_mask(
+            lam_gal,
+            redshift=redshift_0,
+            width=width
+        )
+
+        mask0 = mask_emission
+
+        s.spectra = sanitize_spectrum_1d(s.spectra)
+        s.noise = sanitize_spectrum_1d(s.noise)
+
         galaxy2 = s.spectra / np.nanmedian(s.spectra)
-        noise = galaxy2 * 0.1
+        noise = s.noise / np.nanmedian(s.spectra) #galaxy2 * 0.1
 
         pp = self.ppxf_fit_and_clean(
             sps.templates, galaxy2, noise,
@@ -235,11 +409,19 @@ class StellarKinematics:
             lam_gal, sps.lam_temp
         )
 
-        # ---- redshift and error
+        # redshift and error 
         c = 299792.458
         errors = pp.error * np.sqrt(pp.chi2)
-        redshift_fit = (1 + redshift) * np.exp(pp.sol[0] / c) - 1
+        redshift_fit = (1 + redshift_0) * np.exp(pp.sol[0] / c) - 1
         redshift_err = (1 + redshift_fit) * errors[0] / c
 
         print(f"Best-fitting redshift = {redshift_fit} ± {redshift_err}")
+
+        print("Formal errors:")
+        print("     dV    dsigma   dh3      dh4")
+        print("".join("%8.2g" % f for f in errors))
+        prec = 5 # int(1 - np.floor(np.log10(redshift_err)))  # two digits of uncertainty
+        print(f"Best-fitting redshift z = {redshift_fit:#.{prec}f} "
+                f"+/- {redshift_err:#.{prec}f}")
+
         return redshift_fit, redshift_err

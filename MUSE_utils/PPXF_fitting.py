@@ -176,7 +176,6 @@ class stellar_kinematics:
         )[0]
         plt.show()
 
-
     def setup_stellar_kinematics(self):
         """Setup stellar templates using the stored data."""
         print("Setting up stellar templates...")
@@ -216,6 +215,7 @@ class stellar_kinematics:
 
         # cambiar la emision desde el vacio al aire con el redshift calculator
         lam_gal = np.exp(s.ln_lam_gal)
+        lam_gal *= np.median(util.vac_to_air(lam_gal)/lam_gal)
         self.lam_gal = lam_gal
 
         mask_region = (lam_gal > 7750) & (lam_gal < 7850)
@@ -467,7 +467,6 @@ class GasKinematicsFitter:
         dlam = wavelength * self.s.velscale / c_kms
 
         for i in range(npix):
-            # pp = self.pp_saved[i]
 
             local_idxs = [j for j,g in enumerate(self.gas_names_all[i])
                           if g.startswith(line_name)]
@@ -692,10 +691,28 @@ class GasKinematicsFitter:
         naxis2 = self.s.header['NAXIS2']
         npix = naxis1*naxis2
 
+        fmap = np.full(npix, np.nan)
         vmap = np.full(npix, np.nan)
         sigmap = np.full(npix, np.nan)
         vmap_err = np.full(npix, np.nan)
         sigmap_err = np.full(npix, np.nan)
+        fluxmap_err = np.full(npix, np.nan)
+
+        f_list = np.full(npix, 0)
+        for i in range(npix):
+            local_idxs = [j for j,g in enumerate(self.gas_names_all[i])
+                            if g.startswith(line_name)]
+            if len(local_idxs)==0:
+                continue
+            for j in local_idxs:
+                tpl_idx = 1+j
+                kin = self.component[i][tpl_idx]
+                if kin not in self.active_comps[i]:
+                    continue
+                print(f"Flujo[{i}][{j}] {self.fluxes[i][j]}")
+                f_list[i] = self.fluxes[i][j]
+
+        weightmap = f_list/np.sum(f_list)
 
         for i in range(npix):
             local_idxs = [j for j,g in enumerate(self.gas_names_all[i])
@@ -703,7 +720,7 @@ class GasKinematicsFitter:
             if len(local_idxs)==0:
                 continue
 
-            f_list=[]; v_list=[]; s_list=[]; ev_list=[]; es_list=[]
+            f_list=[]; v_list=[]; s_list=[]; ev_list=[]; es_list=[]; ef_list=[]
 
             for j in local_idxs:
                 tpl_idx = 1+j
@@ -712,16 +729,16 @@ class GasKinematicsFitter:
                     continue
 
                 f = self.fluxes[i][j]
-                ef = self.err_fluxes[i][j] * np.sqrt(self.chi_all[i]) #utilidad?
+                ef = self.err_fluxes[i][j]
                 if f<=0:
                     continue
-
+                
                 v = [self.sol_all[i][0][0], self.sol_all[i][1][0]]
                 s = [self.sol_all[i][0][1], self.sol_all[i][1][1]]
                 ev = [self.error_all[i][0][0], self.error_all[i][1][0]]
                 es = [self.error_all[i][0][1], self.error_all[i][1][1]]
 
-                f_list.append(f); v_list.append(v); s_list.append(s); ev_list.append(ev); es_list.append(es)
+                f_list.append(f); v_list.append(v); s_list.append(s); ev_list.append(ev); es_list.append(es); ef_list.append(ef)
 
             if len(f_list)==0:
                 continue
@@ -731,23 +748,28 @@ class GasKinematicsFitter:
             s = np.array(s_list)
             ev = np.array(ev_list)
             es = np.array(es_list)
-            weights = f/np.sum(f)
-            # añadir el weight y el chi a al fits !!!!!!!!!!!!!!!!!!!!!
-            # multiplicar el chi a los errores
-            # 
-            v_tot = np.sum(weights* v) #resultado
-            e_v_tot = np.sqrt(np.sum((weights * ev)**2)) #resultado
+            ef = np.array(ef_list) #resultado
+            # self.weights = weights #resultado
+            # -añadir el weight y el chi a al fits !!!!!!!!!!!!!!!!!!!!!
+            # -multiplicar el chi a los errores
+            # -agregar los flujos , velocidades y dispersion de cada gausiana por 
+            # individual en otras 
+            e_f_tot = np.sqrt(np.sum(ef**2))
+            v_tot = np.sum(weightmap[i]* v) #resultado
+            e_v_tot = np.sqrt(np.sum((weightmap[i] * ev)**2)) #resultado
 
-            sigma_tot = np.sqrt(np.sum(weights * s**2)) #resultado
-            e_sigma_tot = np.sqrt(np.sum((weights * s / sigma_tot * es)**2)) #resultado
+            sigma_tot = np.sqrt(np.sum(weightmap[i] * s**2)) #resultado
+            e_sigma_tot = np.sqrt(np.sum((weightmap[i] * s / sigma_tot * es)**2)) #resultado
             
             vmap[i] = v_tot
-            vmap_err[i] = e_v_tot
+            vmap_err[i] = e_v_tot* np.sqrt(self.chi_all[i])
             sigmap[i] = sigma_tot
-            sigmap_err[i] = e_sigma_tot
+            sigmap_err[i] = e_sigma_tot* np.sqrt(self.chi_all[i])
+            fluxmap_err[i] = e_f_tot* np.sqrt(self.chi_all[i])
 
         return (vmap.reshape(naxis1,naxis2), sigmap.reshape(naxis1,naxis2),
-                vmap_err.reshape(naxis1,naxis2),sigmap_err.reshape(naxis1,naxis2))
+                vmap_err.reshape(naxis1,naxis2),sigmap_err.reshape(naxis1,naxis2),
+                fluxmap_err.reshape(naxis1,naxis2), weightmap.reshape(naxis1,naxis2))
 
 
     # ------------------------------------------------------------------
@@ -796,13 +818,15 @@ class GasKinematicsFitter:
             print(f"\nProcessing line: {line_name}")
             self._create_flux_maps_for_line(
                 line_name=line_name,
-                wavelength=wavelength_map[line_name]
-            )
+                wavelength=wavelength_map[line_name])
 
         # Weighted velocities
         if "Halpha" in line_map:
-            v, s, ve, se = self.weighted_kinematics_v2("Halpha")
-            self._save_fits([v,s, ve, se], ["Halpha_vel_weighted", "Halpha_sigma_weighted", "Halpha_vel_error_weighted", "Halpha_sigma_error_weighted"])
+            v, s, ve, se, fe, we = self.weighted_kinematics_v2("Halpha")
+            self._save_fits([v,s, ve, se, fe, we], 
+            ["Halpha_vel_weighted", "Halpha_sigma_weighted", 
+             "Halpha_vel_error_weighted", "Halpha_sigma_error_weighted",
+             "Halpha_fluxes_weighted", "Halpha_weight"])
 
 
     # ===================================================================
@@ -943,7 +967,8 @@ class GasKinematicsFitter:
             vel_map = vel_map.reshape(nx, ny)
             sig_map = sig_map.reshape(nx, ny)
             self._save_fits([flux_map, err_map, vel_map, sig_map], 
-                            [f"{prefix}{line}_flux", f"{prefix}{line}_flux_err", f"{prefix}{line}_vel", f"{prefix}{line}_sigma"])
+                            [f"{prefix}{line}_flux", f"{prefix}{line}_flux_err", 
+                             f"{prefix}{line}_vel", f"{prefix}{line}_sigma"])
  
         print("\n✓ All emission-line maps saved.")
 
@@ -955,5 +980,3 @@ class GasKinematicsFitter:
         for i in range(len(names_comp)):
             with fits.open(self.s.outfolder+name+".fits", mode="append") as hdu:
                 hdu.append(fits.ImageHDU(data=datas[i], name=f"{names_comp[i]}"))
-
-# agregar los flujos , velocidades y dispersion de cada gausiana por individual en otras 
