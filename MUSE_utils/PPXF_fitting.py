@@ -240,7 +240,7 @@ class stellar_kinematics:
             galaxy_normalized = galaxy/np.nanmedian(galaxy)     # Normalize spectrum to avoid numerical issues
             
             # Interpolate variance to log-rebinned scale
-            variance = np.nanmean(s.variance[:, w], 1)
+            variance = np.nanmean(s.variance[:, w], 1) # importante cambiar 
             lam_range_temp = np.exp(sps.ln_lam_temp[[0, -1]])
             lam_lin = np.linspace(lam_range_temp[0], lam_range_temp[1], len(variance))
             variance_log = np.interp(lam_gal, lam_lin, variance)
