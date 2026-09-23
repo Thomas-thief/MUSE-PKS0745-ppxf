@@ -10,6 +10,7 @@ import astropy.io.fits as pyfits
 from astropy.wcs import WCS
 
 import numpy as np
+from scipy.stats import mode 
 import matplotlib.pyplot as plt
 from joblib import Parallel, delayed
 from tqdm import tqdm
@@ -205,7 +206,7 @@ class stellar_kinematics:
         sps.templates = sps.templates.reshape(npix, -1)
         sps.templates /= np.median(sps.templates) # Normalizes stellar templates by a scalar
         self.reg_dim = reg_dim
-        print("reg_dim",len(reg_dim))
+        #print("reg_dim",len(reg_dim))
 
         lam_range_temp = np.exp(sps.ln_lam_temp[[0, -1]])
         #mask0 = util.determine_mask(s.ln_lam_gal, lam_range_temp, width=1000)
@@ -231,11 +232,11 @@ class stellar_kinematics:
         optimal_templates = np.empty((npix, nbins))
 
         for j in range(nbins):
-            print(f"{j} / {range(nbins)[-1]}-------------------------------------")
+            print(f"{j+1} / {range(nbins)[-1]+1}----------------------------------------------")
             plot = True
             w = bin_num == j
             galaxy = np.nanmean(s.spectra[:, w], 1)
-            galaxy = ph.replace_nan(galaxy,np.nanmean(galaxy))
+            galaxy = ph.replace_invalid(galaxy,np.nanmean(galaxy)) # importante cambiar 
             galaxy_normalized = galaxy/np.nanmedian(galaxy)     # Normalize spectrum to avoid numerical issues
             
             # Interpolate variance to log-rebinned scale
@@ -262,7 +263,7 @@ class stellar_kinematics:
             velbin[j], sigbin[j], h3[j], h4[j] = pp_stars.sol
             optimal_templates[:, j] = pp_stars.optimal_template
             if plot:
-                txt = f"Voronoi bin {j + 1} / {nbins}; SPS: {sps_name}; $\\sigma$={sigbin[j]:.0f} km/s; S/N={pp_stars.sn:.1f}"
+                txt = f"Voronoi bin {j+1} / {nbins}; SPS: {sps_name}; $\sigma$={sigbin[j]:.0f} km/s; S/N={pp_stars.sn:.1f}"
                 print(txt + '\n' + '#'*78)
                 plt.title(txt)
                 plt.savefig(self.s.outfolder+f'Stellar_fitting_example_{j+1}.png',dpi=300)
@@ -279,17 +280,23 @@ class stellar_kinematics:
 
         # light_weights = pp_stars.weights.reshape(reg_dim)
         # lg_age_bin[j], metalbin[j] = sps.mean_age_metal(light_weights, quiet=not plot)
+        dec0 = np.mean(s.y)  # deg, reference declination
+        CD1_1 = s.header["CD1_1"]
+        # convert to arcsec offsets, preserving the CD1_1 sign convention
+        x_arcsec = (s.x - np.mean(s.x)) * 3600 * np.cos(np.radians(dec0)) * np.sign(CD1_1)
+        y_arcsec = (s.y - np.mean(s.y)) * 3600
 
+        pixelsize = abs(CD1_1) * 3600  # = 0.2 arcsec, use this instead of hardcoding 0.1
         plt.subplots(1, 2, figsize=(16, 8))
         plt.subplots_adjust(wspace=0.5)
 
         plt.subplot(121)
-        display_bins(s.x, s.y, bin_num, velbin, colorbar=1, label='V (km/s)',pixelsize=0.1)
+        display_bins(s.x, s.y, bin_num, velbin, colorbar=1, label='V (km/s)', pixelsize=pixelsize)
         #plt.tricontour(s.x, s.y, -2.5*np.log10(signal/np.max(signal).ravel()), levels=np.arange(20));  # 1 mag contours
 
         plt.subplot(122)
-        #sigbin = np.array(replace_nan(noise,np.nanmean(sigbin)))
-        display_bins(s.x, s.y, bin_num, sigbin, colorbar=1, cmap='inferno', label='Vsigma (yr)',pixelsize=0.1)
+        #sigbin = np.array(replace_invalid(noise,np.nanmean(sigbin)))
+        display_bins(s.x, s.y, bin_num, sigbin, colorbar=1, cmap='inferno', label='Vsigma (yr)', pixelsize=pixelsize)
         #plt.tricontour(s.x, s.y, -2.5*np.log10(signal/np.max(signal).ravel()), levels=np.arange(20));  # 1 mag contours
 
         plt.tight_layout()
@@ -600,7 +607,7 @@ class GasKinematicsFitter:
     ):
         # Extract spectrum + noise
         galaxy = np.asarray(spectra[:, j], float)
-        galaxy = np.asarray(ph.replace_nan(galaxy, np.nanmean(galaxy)), float)
+        galaxy = np.asarray(ph.replace_invalid(galaxy, np.nanmean(galaxy)), float) # importante cambiar
  
         variance_j = np.asarray(variance[:, j], float)
         lam_range_temp = np.exp(ln_lam_temp[[0, -1]])
@@ -881,16 +888,17 @@ class GasKinematicsFitter:
 
         # 1. Extract spectrum & noise
         galaxy = np.asarray(spectra[:, j], float)
-        galaxy = np.asarray(ph.replace_nan(galaxy, np.nanmean(galaxy)), float)
+        galaxy = np.where(np.isfinite(galaxy) & (galaxy>0), galaxy, mode(galaxy[np.isfinite(galaxy) & (galaxy>0)])[0])
  
         variance_j = np.asarray(variance[:, j], float)
         lam_range_temp = np.exp(ln_lam_temp[[0, -1]])
         lam_lin = np.linspace(lam_range_temp[0], lam_range_temp[1], len(variance_j))
- 
+
+        variance_j = np.where(np.isfinite(variance_j) & (variance_j>0), variance_j, mode(variance_j[np.isfinite(variance_j) & (variance_j>0)])[0])
         variance_log = np.interp(lam_gal, lam_lin, variance_j)
         noise = np.sqrt(np.abs(variance_log))
-        noise = np.asarray(ph.replace_nan(noise, np.nanmean(noise)), float)
- 
+
+        noise = np.asarray(noise, float)
         # 2. Stellar template (Voronoi bin)
         kbin = bin_num[j]
         template = np.asarray(optimal_templates[:, kbin], float)

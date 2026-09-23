@@ -23,23 +23,6 @@ from plotbin.display_bins import display_bins
 from plotbin.plot_velfield import plot_velfield
 
 
-def replace_nan(data, value=0):
-    """
-    Replaces NaN values in a list with a specified value.
-
-    Args:
-        data (list): The input list.
-        value: The value to replace NaN with (default is 0).
-
-    Returns:
-        list: A new list with NaN values replaced.
-    """
-    new_data = [value if isinstance(x, float) and math.isnan(x) else x for x in data]
-    return new_data
-
-
-
-
 def _wave_convert(lam):
     """
     Convert between vacuum and air wavelengths using
@@ -360,7 +343,7 @@ def determine_mask(ln_lam, lam_range_temp, redshift=0, width=800):
 
     return ~flag
 
-def replace_nan(data, value=0):
+def replace_invalid(data, value=True):
     """
     Replaces NaN values in a list with a specified value.
 
@@ -371,14 +354,38 @@ def replace_nan(data, value=0):
     Returns:
         list: A new list with NaN values replaced.
     """
-    new_data = [value if isinstance(x, float) and math.isnan(x) else x for x in data]
+    if value==True:
+        new_data = np.where(np.isnan(data), True, False)
+    else:
+        new_data = np.where(np.isnan(data), value, data)
+    # new_data = [value if (np.issubdtype(type(x), np.floating) and np.isnan(x)) else x for x in data]
     return new_data
 
+def replace_and_mask(data, funct, replacement):
+    """
+    Replaces NaN values in a list with a specified value.
+
+    Args:
+        data (list): The input list.
+        funct: function to create the mask
+        replacement: replacement of the data masked from the function
+
+    Returns:
+        data_out: 
+        mask: 
+    """
+    mask = funct(data)
+    data[~mask] = np.nanmean(data[mask])
+    return data, mask
+
 class read_data_cube:
-    def __init__(self, filename, lam_range, redshift):
+    def __init__(self, filename, lam_range, redshift, rango_y=False, rango_x=False):
         """Read data cube, de-redshift, log rebin and compute coordinates of each spaxel."""
 
         self.read_fits_file(filename)
+        if rango_x!=False and rango_y!=False:
+            self.cube, self.header = cut_cube_simple(self.cube, self.header, rango_y, rango_x)
+            self.cubevar, _ = cut_cube_simple(self.cubevar, self.header, rango_y, rango_x)
 
         # Only use the specified rest-frame wavelength range
         wave = self.wave/(1 + redshift)      # de-redshift the spectrum
@@ -404,8 +411,27 @@ class read_data_cube:
         c = 299792.458  # speed of light in km/s
         velscale = np.min(c*np.diff(np.log(wave)))  # Preserve smallest velocity step
         lam_range_temp = np.array([np.min(wave), np.max(wave)])
-        spectra, ln_lam_gal, velscale = util.log_rebin(lam_range_temp, spectra, velscale=velscale)
-        variance, _, _ = util.log_rebin(lam_range_temp, variance, velscale=velscale) #!!!!!!!!!!!
+
+        n_spax = spectra.shape[1]
+        chunk_size = 400#20000!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!11 IMPORTANTE
+        spec_list = []
+        var_list = []
+        #spec_blank= np.zeros_like(spectra)
+        #var_blank = np.zeros_like(variance)
+
+        for i in range(0, n_spax, chunk_size):
+            s_chunk = spectra[:, i:i+chunk_size]
+            v_chunk = variance[:, i:i+chunk_size]
+            spec_chunk, ln_lam_gal, velscale = util.log_rebin(lam_range_temp, s_chunk, velscale=velscale)
+            spec_list.append(spec_chunk)
+            var_chunk, _, _ = util.log_rebin(lam_range_temp, v_chunk, velscale=velscale)
+            var_list.append(var_chunk)
+        del s_chunk, v_chunk, spec_chunk, var_chunk, spectra, variance
+        spectra = np.hstack(spec_list)
+        variance = np.hstack(var_list)
+        del spec_list, var_list
+        # spectra, ln_lam_gal, velscale = util.log_rebin(lam_range_temp, spectra, velscale=velscale)
+        # variance, _, _ = util.log_rebin(lam_range_temp, variance, velscale=velscale) #!!!!!!!!!!!
         #print(f"despues del log_rebin{spectra.shape}--{variance.shape}")
         # Coordinates and spectra only for spaxels with enough signal
         self.spectra = spectra
@@ -420,7 +446,6 @@ class read_data_cube:
         self.velscale = velscale
         self.ln_lam_gal = ln_lam_gal
         self.fwhm_gal = self.fwhm_gal/(1 + redshift)
-        self.header = self.header
 
 ###############################################################################
 
@@ -447,27 +472,13 @@ class read_data_cube:
         self.cubevar = cubevar
         self.wave = wave
         self.fwhm_gal = 2.62  # Median FWHM = 2.62Å. Range: 2.51--2.88 (ESO instrument manual).
-        self.pixsize = header["CDELT2"]
+        try:
+            self.pixsize = header["CDELT2"]
+        except:
+            self.pixsize = header["CD2_2"]
         self.header = header
 
 ###############################################################################
-
-# def clip_outliers(galaxy, bestfit, mask):
-#     """
-#     Repeat the fit after clipping bins deviants more than 3*sigma in relative
-#     error until the bad bins don't change any more. This function uses eq.(34)
-#     of Cappellari (2023) https://ui.adsabs.harvard.edu/abs/2023MNRAS.526.3273C
-#     """
-#     while True:
-#         scale = galaxy[mask] @ bestfit[mask]/np.sum(bestfit[mask]**2)
-#         resid = scale*bestfit[mask] - galaxy[mask]
-#         err = robust_sigma(resid, zero=1)
-#         ok_old = mask
-#         mask = np.abs(bestfit - galaxy) < 6.0*err
-#         if np.array_equal(mask, ok_old):
-#             break
-            
-#     return mask
 
 def clip_outliers(galaxy, bestfit, mask, max_iter=10):
     """
@@ -542,18 +553,22 @@ def ppxf_fit_and_clean(templates, galaxy, noise, velscale, start, mask0, lam, la
     
     return pp
 
-def cut_cube_simple(cube, center, size):
-    '''
-    Function to cut a fits cube using mpdaf
-    cube : path to the fits cube
-    center : [RA, DEC] in degrees
-    size : size of the cut in arcsec
-    returns : mpdaf Cube object
-    '''
-    c = SkyCoord(center[0]*u.deg, center[1]*u.deg, frame='icrs')
-    cube = Cube(cube)
-    cut = cube.subcube(center=c, size=size * u.arcsec)
-    return cut
+def cut_cube_simple(cube, header, range_y, range_x):
+    """
+    Function to change the size between a range of axis
+
+    :param cube: Cube thich needs to be cut
+    :param header: Header of the cube
+    :param range_x: List of two elements, the id/element in the X axis
+    :param range_y: List of two elements, the id/element in the Y axis 
+    :return cube, header: Cube cut between the range indicated and header modified
+
+    """
+    cube_out = cube[:, range_y[0]:range_y[1] , range_x[0]:range_x[1] ]
+    header["NAXIS1"] = cube_out.shape[2]
+    header["NAXIS2"] = cube_out.shape[1]
+    header_out = header
+    return cube_out, header_out
 
 def cut_cube(filename,ra,dec,size,filename_output):
     '''
