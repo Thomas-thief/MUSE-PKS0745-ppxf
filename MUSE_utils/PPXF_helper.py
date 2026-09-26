@@ -310,7 +310,7 @@ def emission_lines(ln_lam_temp, lam_range_gal, FWHM_gal, pixel=True,
     return emission_lines, line_names, line_wave
 
 
-def determine_mask(ln_lam, lam_range_temp, redshift=0, width=800):
+def determine_mask(ln_lam, lam_range_temp, redshift=0.08191, width=800):
     """
     Generates a mask to avoid fitting the region possibly contaminated by a
     given set of gas emission lines. This is meant to be used as input for pPXF.
@@ -355,10 +355,10 @@ def replace_invalid(data, value=True):
         list: A new list with NaN values replaced.
     """
     if value==True:
-        new_data = np.where(np.isnan(data), True, False)
+        new_data = np.where(np.isfinite(data), True, False)
     else:
-        new_data = np.where(np.isnan(data), value, data)
-    # new_data = [value if (np.issubdtype(type(x), np.floating) and np.isnan(x)) else x for x in data]
+        new_data = np.where(np.isfinite(data), value, data)
+    # new_data = [value if (np.issubdtype(type(x), np.floating) and np.isfinite(x)) else x for x in data]
     return new_data
 
 def replace_and_mask(data, funct, replacement):
@@ -413,7 +413,7 @@ class read_data_cube:
         lam_range_temp = np.array([np.min(wave), np.max(wave)])
 
         n_spax = spectra.shape[1]
-        chunk_size = 400#20000!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!11 IMPORTANTE
+        chunk_size = 20000
         spec_list = []
         var_list = []
         #spec_blank= np.zeros_like(spectra)
@@ -557,16 +557,16 @@ def cut_cube_simple(cube, header, range_y, range_x):
     """
     Function to change the size between a range of axis
 
-    :param cube: Cube thich needs to be cut
+    :param cube: Cube which needs to be cut
     :param header: Header of the cube
     :param range_x: List of two elements, the id/element in the X axis
     :param range_y: List of two elements, the id/element in the Y axis 
     :return cube, header: Cube cut between the range indicated and header modified
 
     """
-    cube_out = cube[:, range_y[0]:range_y[1] , range_x[0]:range_x[1] ]
-    header["NAXIS1"] = cube_out.shape[2]
-    header["NAXIS2"] = cube_out.shape[1]
+    cube_out = cube[:, range_y[0]:range_y[1] , range_x[0]:range_x[1]]
+    header["NAXIS1"] = cube_out.shape[1]
+    header["NAXIS2"] = cube_out.shape[2]
     header_out = header
     return cube_out, header_out
 

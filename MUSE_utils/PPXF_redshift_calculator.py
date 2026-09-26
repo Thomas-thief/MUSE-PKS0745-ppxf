@@ -98,7 +98,7 @@ class CubeUtils:
 
     @staticmethod
     def replace_nan(data, value=0):
-        return [value if isinstance(x, float) and math.isnan(x) else x for x in data]
+        return [value if isinstance(x, float) and math.isfinite(x) else x for x in data]
 
     @staticmethod
     def find_max_index(image_array):
@@ -152,7 +152,7 @@ class CubeUtils:
         # Plot identical to your original
         f = plt.figure(figsize=(15, 5))
         f.add_subplot(1, 2, 1)
-        vmin0, vmax0 = np.percentile(image.data[~np.isnan(image.data)], (1, 99.5))
+        vmin0, vmax0 = np.percentile(image.data[~np.isfinite(image.data)], (1, 99.5))
         plt.imshow(image.data, origin='lower', cmap='inferno', vmin=vmin0, vmax=vmax0)
         circ = plt.Circle((coor_x - 1, coor_y - 1), radius=radius,
                           linewidth=2, edgecolor='darkgoldenrod', fill=False)
