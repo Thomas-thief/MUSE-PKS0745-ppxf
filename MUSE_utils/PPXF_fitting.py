@@ -608,6 +608,10 @@ class GasKinematicsFitter:
     ):
         # Extract spectrum + noise
         galaxy = np.asarray(spectra[:, j], float)
+        bad_pix_gal = ~np.isfinite(galaxy)
+        if np.any(bad_pix_gal):
+            good_pix_gal = ~bad_pix_gal
+            galaxy[bad_pix_gal] = np.interp(lam_gal[bad_pix_gal], lam_gal[good_pix_gal], galaxy[good_pix_gal])
         # galaxy = np.asarray(ph.replace_invalid(galaxy, np.nanmean(galaxy)), float) # importante cambiar
  
         variance_j = np.asarray(variance[:, j], float)
@@ -622,9 +626,8 @@ class GasKinematicsFitter:
  
         # Masks
         mask = (~((lam_gal > 7500) & (lam_gal < 7750)) &
-                ~((lam_gal > 6810) & (lam_gal < 6900)) & 
-                np.isfinite(galaxy) & np.isfinite(variance_j))
-        goodpixels = np.where(mask)[0]
+                ~((lam_gal > 6810) & (lam_gal < 6900)))
+        goodpixels = np.where(mask & good_pix_gal & np.isfinite(variance_j))[0]
  
         vk, sk, h3k, h4k = velbin[kbin], sigbin[kbin], h3[kbin], h4[kbin]
  
