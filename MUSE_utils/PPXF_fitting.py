@@ -610,8 +610,9 @@ class GasKinematicsFitter:
         galaxy = np.asarray(spectra[:, j], float)
         bad_pix_gal = ~np.isfinite(galaxy)
         if np.any(bad_pix_gal):
-            good_pix_gal = ~bad_pix_gal
-            galaxy[bad_pix_gal] = np.interp(lam_gal[bad_pix_gal], lam_gal[good_pix_gal], galaxy[good_pix_gal])
+            good_pix_gal = ~bad_pix_gal #revisar como hacer la sobreescritura del 
+            gal_inter = np.interp(lam_gal, lam_gal[good_pix_gal], galaxy[good_pix_gal])
+            galaxy = np.where(bad_pix_gal, gal_inter, galaxy)
         # galaxy = np.asarray(ph.replace_invalid(galaxy, np.nanmean(galaxy)), float) # importante cambiar
  
         variance_j = np.asarray(variance[:, j], float)
@@ -627,7 +628,7 @@ class GasKinematicsFitter:
         # Masks
         mask = (~((lam_gal > 7500) & (lam_gal < 7750)) &
                 ~((lam_gal > 6810) & (lam_gal < 6900)))
-        goodpixels = np.where(mask & good_pix_gal & np.isfinite(variance_j))[0]
+        goodpixels = np.where(mask & np.isfinite(galaxy) & np.isfinite(variance_j))[0]
  
         vk, sk, h3k, h4k = velbin[kbin], sigbin[kbin], h3[kbin], h4[kbin]
  
@@ -646,6 +647,7 @@ class GasKinematicsFitter:
                 galaxy, noise, goodpixels, True,
                 n_lines, vk, sk, h3k, h4k, velscale, lam_gal, lam_temp
             )
+            del pp1
             return pp2.gas_flux, pp2.gas_flux_error, pp2.gas_names, pp2.chi2, [1], pp2.component, pp2.sol, pp2.error
 
         f1 = pp1.gas_flux[idx_Ha1]
@@ -664,6 +666,7 @@ class GasKinematicsFitter:
         idx_Ha1_2 = GasKinematicsFitter._get_Halpha_index_static(pp2.gas_names, "Halpha_(1)")
         idx_Ha2_2 = GasKinematicsFitter._get_Halpha_index_static(pp2.gas_names, "Halpha_(2)")
         if (idx_Ha1_2 is None) or (idx_Ha2_2 is None):
+            del pp1
             return pp2.gas_flux, pp2.gas_flux_error, pp2.gas_names, pp2.chi2, [1], pp2.component, pp2.sol, pp2.error
  
         f1_2 = pp2.gas_flux[idx_Ha1_2]
@@ -671,8 +674,10 @@ class GasKinematicsFitter:
         frac = f2_2 / (f1_2 + f2_2) if (f1_2 + f2_2) > 0 else 0.0
  
         if (sn_Ha >= sn_min) and (dBIC > dBIC_min) and (frac > frac_min):
+            del pp1
             return pp2.gas_flux, pp2.gas_flux_error, pp2.gas_names, pp2.chi2, [1, 2], pp2.component, pp2.sol, pp2.error
         else:
+            del pp2
             return pp1.gas_flux, pp1.gas_flux_error, pp1.gas_names, pp1.chi2, [1], pp1.component, pp1.sol, pp1.error
 
 
@@ -830,7 +835,7 @@ class GasKinematicsFitter:
     def Fit_cube(self, n_jobs=-1):
         n_lines = len(self.gas_names_base)
  
-        results = Parallel(n_jobs=n_jobs, backend="loky", max_nbytes="1M", batch_size=10)(
+        results = Parallel(n_jobs=n_jobs, backend="loky", max_nbytes="1M", batch_size=12)(
             delayed(GasKinematicsFitter._fit_single_spaxel_static)(
                 j,
                 self.s.spectra, self.s.variance, self.sps.ln_lam_temp,
@@ -970,7 +975,7 @@ class GasKinematicsFitter:
         Run pPXF for each spaxel using ONLY ONE GAS KINEMATIC COMPONENT.
         Useful for producing single-Gaussian maps (flux, vel, sigma).
         """
-        results = Parallel(n_jobs=n_jobs, backend="loky", max_nbytes="1M", batch_size=10)(
+        results = Parallel(n_jobs=n_jobs, backend="loky", max_nbytes="1M", batch_size=15)(
             delayed(GasKinematicsFitter._fit_single_gaussian_static)(
                 j, self.s.spectra, self.s.variance, self.sps.ln_lam_temp,
                 self.lam_gal, self.bin_num, self.optimal_templates,
@@ -995,14 +1000,13 @@ class GasKinematicsFitter:
         ny = self.s.header["NAXIS2"]
         npix = nx * ny
  
-        line_list = sorted(set(name.split("_(")[0] for name in self.gas_names_1))
- 
+        line_list = list(name.split("_(")[0] for name in self.gas_names_1)
+
         print("\nSaving single-Gaussian maps for:")
+        wavelength_map = self.build_wavelength_map(line_list)
         for line in line_list:
             print("  →", line)
- 
-        for line in line_list:
- 
+            dlam = wavelength_map[line] * self.s.velscale / c_kms
             flux_map = np.zeros(npix)
             err_map = np.zeros(npix)
             vel_map = np.full(npix, np.nan)
@@ -1010,7 +1014,7 @@ class GasKinematicsFitter:
  
             for i in range(npix):
                 f, e, v, s = self.line_results_1g[i].get(line, (0.0, 0.0, np.nan, np.nan))
-                flux_map[i] = f
+                flux_map[i] = f *dlam
                 err_map[i] = e
                 vel_map[i] = v
                 sig_map[i] = s
