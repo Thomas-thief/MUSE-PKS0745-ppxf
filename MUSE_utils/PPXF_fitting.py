@@ -615,6 +615,10 @@ class GasKinematicsFitter:
         # galaxy = np.asarray(ph.replace_invalid(galaxy, np.nanmean(galaxy)), float) # importante cambiar
  
         variance_j = np.asarray(variance[:, j], float)
+        bad_pix_var = ((~np.isfinite(variance_j)) | (variance_j <= 0))
+        if np.any(bad_pix_var):
+            var_inter = np.interp(lam_gal, lam_gal[~bad_pix_var], variance_j[~bad_pix_var])
+            variance_j = np.where(bad_pix_var, var_inter, variance_j)
         lam_range_temp = np.exp(ln_lam_temp[[0, -1]])
         lam_lin = np.linspace(lam_range_temp[0], lam_range_temp[1], len(variance_j))
         variance_log = np.abs(np.interp(lam_gal, lam_lin, variance_j))
@@ -627,7 +631,7 @@ class GasKinematicsFitter:
         # Masks
         mask = (~((lam_gal > 7500) & (lam_gal < 7750)) &
                 ~((lam_gal > 6810) & (lam_gal < 6900)))
-        goodpixels = np.where(mask & np.isfinite(galaxy) & np.isfinite(variance_j))[0]
+        goodpixels = np.where(mask & np.isfinite(galaxy) & np.isfinite(variance_j) & (variance_j > 0))[0]
  
         vk, sk, h3k, h4k = velbin[kbin], sigbin[kbin], h3[kbin], h4[kbin]
  
@@ -831,10 +835,10 @@ class GasKinematicsFitter:
     # ------------------------------------------------------------------
     # Run ALL spaxels in parallel
     # ------------------------------------------------------------------
-    def Fit_cube(self, n_jobs=-1):
+    def Fit_cube(self, n_jobs=-1, batch_size=40, max_nbytes="1M"):
         n_lines = len(self.gas_names_base)
  
-        results = Parallel(n_jobs=n_jobs, backend="loky", max_nbytes="1M", batch_size=12)(
+        results = Parallel(n_jobs=n_jobs, backend="loky", batch_size=batch_size, max_nbytes=max_nbytes)(
             delayed(GasKinematicsFitter._fit_single_spaxel_static)(
                 j,
                 self.s.spectra, self.s.variance, self.sps.ln_lam_temp,
@@ -969,12 +973,12 @@ class GasKinematicsFitter:
     # ===================================================================
     # --- NEW: Run a PURE 1-GAUSSIAN FIT for all spaxels ----------------
     # ===================================================================
-    def Fit_cube_one_component(self, n_jobs=-1):
+    def Fit_cube_one_component(self, n_jobs=-1, batch_size=40, max_nbytes="1M"):
         """
         Run pPXF for each spaxel using ONLY ONE GAS KINEMATIC COMPONENT.
         Useful for producing single-Gaussian maps (flux, vel, sigma).
         """
-        results = Parallel(n_jobs=n_jobs, backend="loky", max_nbytes="1M", batch_size=15)(
+        results = Parallel(n_jobs=n_jobs, backend="loky", max_nbytes=max_nbytes, batch_size=batch_size)(
             delayed(GasKinematicsFitter._fit_single_gaussian_static)(
                 j, self.s.spectra, self.s.variance, self.sps.ln_lam_temp,
                 self.lam_gal, self.bin_num, self.optimal_templates,
