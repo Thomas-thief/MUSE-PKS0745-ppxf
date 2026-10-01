@@ -610,15 +610,14 @@ class GasKinematicsFitter:
         galaxy = np.asarray(spectra[:, j], float)
         bad_pix_gal = ~np.isfinite(galaxy)
         if np.any(bad_pix_gal):
-            good_pix_gal = ~bad_pix_gal #revisar como hacer la sobreescritura del 
-            gal_inter = np.interp(lam_gal, lam_gal[good_pix_gal], galaxy[good_pix_gal])
+            gal_inter = np.interp(lam_gal, lam_gal[~bad_pix_gal], galaxy[~bad_pix_gal])
             galaxy = np.where(bad_pix_gal, gal_inter, galaxy)
         # galaxy = np.asarray(ph.replace_invalid(galaxy, np.nanmean(galaxy)), float) # importante cambiar
  
         variance_j = np.asarray(variance[:, j], float)
         lam_range_temp = np.exp(ln_lam_temp[[0, -1]])
         lam_lin = np.linspace(lam_range_temp[0], lam_range_temp[1], len(variance_j))
-        variance_log = np.interp(lam_gal, lam_lin, variance_j)
+        variance_log = np.abs(np.interp(lam_gal, lam_lin, variance_j))
         noise = np.sqrt(variance_log)
  
         # Stellar template from its Voronoi bin
