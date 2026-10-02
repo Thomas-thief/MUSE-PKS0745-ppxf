@@ -598,7 +598,7 @@ class GasKinematicsFitter:
     # ------------------------------------------------------------------
     @staticmethod
     def _fit_single_spaxel_static(
-        j, spectra, variance, ln_lam_temp, lam_gal,
+        j, galaxy, variance_j, ln_lam_temp, lam_gal,
         bin_num, optimal_templates,
         gas_templates_1, gas_names_1,
         gas_templates_2, gas_names_2,
@@ -607,14 +607,14 @@ class GasKinematicsFitter:
         sn_min=80, dBIC_min=7, frac_min=0.1
     ):
         # Extract spectrum + noise
-        galaxy = np.asarray(spectra[:, j], float)
+        #galaxy = np.asarray(spectra[:, j], float)
         bad_pix_gal = ~np.isfinite(galaxy)
         if np.any(bad_pix_gal):
             gal_inter = np.interp(lam_gal, lam_gal[~bad_pix_gal], galaxy[~bad_pix_gal])
             galaxy = np.where(bad_pix_gal, gal_inter, galaxy)
         # galaxy = np.asarray(ph.replace_invalid(galaxy, np.nanmean(galaxy)), float) # importante cambiar
  
-        variance_j = np.asarray(variance[:, j], float)
+        #variance_j = np.asarray(variance[:, j], float)
         bad_pix_var = ((~np.isfinite(variance_j)) | (variance_j <= 0))
         if np.any(bad_pix_var):
             var_inter = np.interp(lam_gal, lam_gal[~bad_pix_var], variance_j[~bad_pix_var])
@@ -656,6 +656,8 @@ class GasKinematicsFitter:
         f1 = pp1.gas_flux[idx_Ha1]
         e1 = pp1.gas_flux_error[idx_Ha1]
         sn_Ha = f1 / e1 if e1 > 0 else 0.0
+        if sn_Ha < sn_min:
+            return (pp1.gas_flux, pp1.gas_flux_error, pp1.gas_names, pp1.chi2, [1], pp1.component, pp1.sol, pp1.error)
  
         # -------------------------- 2-component fit -------------------------
         pp2 = GasKinematicsFitter._run_ppxf_fit_static(
@@ -841,7 +843,7 @@ class GasKinematicsFitter:
         results = Parallel(n_jobs=n_jobs, backend="loky", batch_size=batch_size, max_nbytes=max_nbytes)(
             delayed(GasKinematicsFitter._fit_single_spaxel_static)(
                 j,
-                self.s.spectra, self.s.variance, self.sps.ln_lam_temp,
+                np.asarray(self.s.spectra[:,j], float), np.array(self.s.variance[:,j]), self.sps.ln_lam_temp,
                 self.lam_gal, self.bin_num, self.optimal_templates,
                 self.gas_templates_1, self.gas_names_1,
                 self.gas_templates_2, self.gas_names_2,
