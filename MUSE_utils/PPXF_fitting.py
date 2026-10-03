@@ -427,10 +427,9 @@ class GasKinematicsFitter:
     # Utility methods
     # ------------------------------------------------------------------
     @staticmethod
-    def _get_BIC_static(pp):
-        chi2 = pp.chi2 * pp.dof
-        k = pp.npix - pp.dof
-        N = pp.npix
+    def _get_BIC_static(chi, dof, N):
+        chi2 = chi * dof
+        k = N - dof
         return chi2 + k * np.log(N)
  
     @staticmethod
@@ -503,7 +502,7 @@ class GasKinematicsFitter:
 
                 if f>0:
                     f_val = f*dlam
-                    f_err = ferr*np.sqrt(self.chi_all[i])
+                    f_err = ferr*np.sqrt(self.chi_all[i])*dlam
                 else:
                     f_val = 0.0
                     f_err = 0.0
@@ -639,51 +638,49 @@ class GasKinematicsFitter:
         pp1 = GasKinematicsFitter._run_ppxf_fit_static(
             template, gas_templates_1, gas_names_1,
             galaxy, noise, goodpixels, False,
-            n_lines, vk, sk, h3k, h4k, velscale, lam_gal, lam_temp
-        )
-        BIC1 = GasKinematicsFitter._get_BIC_static(pp1)
+            n_lines, vk, sk, h3k, h4k, velscale, lam_gal, lam_temp)
+        gas_flux1, gas_flux_error1, gas_names1, chi21, component1, sol1, error1, dof1 = pp1.gas_flux, pp1.gas_flux_error, pp1.gas_names, pp1.chi2, pp1.component, pp1.sol, pp1.error, pp1.dof
+        del pp1
+        BIC1 = GasKinematicsFitter._get_BIC_static(chi21, dof1, len(galaxy))
  
-        idx_Ha1 = GasKinematicsFitter._get_Halpha_index_static(pp1.gas_names, "Halpha_(1)")
+        idx_Ha1 = GasKinematicsFitter._get_Halpha_index_static(gas_names1, "Halpha_(1)")
         if idx_Ha1 is None:
             pp2 = GasKinematicsFitter._run_ppxf_fit_static(
                 template, gas_templates_2, gas_names_2,
                 galaxy, noise, goodpixels, True,
                 n_lines, vk, sk, h3k, h4k, velscale, lam_gal, lam_temp
             )
-            del pp1
             return pp2.gas_flux, pp2.gas_flux_error, pp2.gas_names, pp2.chi2, [1], pp2.component, pp2.sol, pp2.error
 
-        f1 = pp1.gas_flux[idx_Ha1]
-        e1 = pp1.gas_flux_error[idx_Ha1]
+        f1 = gas_flux1[idx_Ha1]
+        e1 = gas_flux_error1[idx_Ha1]
         sn_Ha = f1 / e1 if e1 > 0 else 0.0
-        if sn_Ha < sn_min:
-            return (pp1.gas_flux, pp1.gas_flux_error, pp1.gas_names, pp1.chi2, [1], pp1.component, pp1.sol, pp1.error)
+        # if sn_Ha < sn_min:
+        #     return (pp1.gas_flux, pp1.gas_flux_error, pp1.gas_names, pp1.chi2, [1], pp1.component, pp1.sol, pp1.error)
  
         # -------------------------- 2-component fit -------------------------
         pp2 = GasKinematicsFitter._run_ppxf_fit_static(
             template, gas_templates_2, gas_names_2,
             galaxy, noise, goodpixels, True,
-            n_lines, vk, sk, h3k, h4k, velscale, lam_gal, lam_temp
-        )
-        BIC2 = GasKinematicsFitter._get_BIC_static(pp2)
+            n_lines, vk, sk, h3k, h4k, velscale, lam_gal, lam_temp)
+        gas_flux2, gas_flux_error2, gas_names2, chi22, component2, sol2, error2, dof2 = pp2.gas_flux, pp2.gas_flux_error, pp2.gas_names, pp2.chi2, pp2.component, pp2.sol, pp2.error, pp2.dof
+        del pp2
+        BIC2 = GasKinematicsFitter._get_BIC_static(chi21, dof1, len(galaxy))
         dBIC = BIC1 - BIC2
  
-        idx_Ha1_2 = GasKinematicsFitter._get_Halpha_index_static(pp2.gas_names, "Halpha_(1)")
-        idx_Ha2_2 = GasKinematicsFitter._get_Halpha_index_static(pp2.gas_names, "Halpha_(2)")
+        idx_Ha1_2 = GasKinematicsFitter._get_Halpha_index_static(gas_names2, "Halpha_(1)")
+        idx_Ha2_2 = GasKinematicsFitter._get_Halpha_index_static(gas_names2, "Halpha_(2)")
         if (idx_Ha1_2 is None) or (idx_Ha2_2 is None):
-            del pp1
-            return pp2.gas_flux, pp2.gas_flux_error, pp2.gas_names, pp2.chi2, [1], pp2.component, pp2.sol, pp2.error
+            return gas_flux2, gas_flux_error2, gas_names2, chi22, [1], component2, sol2, error2
  
-        f1_2 = pp2.gas_flux[idx_Ha1_2]
-        f2_2 = pp2.gas_flux[idx_Ha2_2]
+        f1_2 = gas_flux2[idx_Ha1_2]
+        f2_2 = gas_flux2[idx_Ha2_2]
         frac = f2_2 / (f1_2 + f2_2) if (f1_2 + f2_2) > 0 else 0.0
  
         if (sn_Ha >= sn_min) and (dBIC > dBIC_min) and (frac > frac_min):
-            del pp1
-            return pp2.gas_flux, pp2.gas_flux_error, pp2.gas_names, pp2.chi2, [1, 2], pp2.component, pp2.sol, pp2.error
+            return gas_flux2, gas_flux_error2, gas_names2, chi22, [1, 2], component2, sol2, error2
         else:
-            del pp2
-            return pp1.gas_flux, pp1.gas_flux_error, pp1.gas_names, pp1.chi2, [1], pp1.component, pp1.sol, pp1.error
+            return gas_flux1, gas_flux_error1, gas_names1, chi21, [1], component1, sol1, error1
 
 
     # ------------------------------------------------------------------
@@ -896,16 +893,16 @@ class GasKinematicsFitter:
     # ===================================================================
     @staticmethod
     def _fit_single_gaussian_static(
-        j, spectra, variance, ln_lam_temp, lam_gal,
+        j, galaxy, variance_j, ln_lam_temp, lam_gal,
         bin_num, optimal_templates,
         gas_templates_1, gas_names_1,
         velbin, sigbin, h3, h4, velscale, lam_temp):
 
         # 1. Extract spectrum & noise
-        galaxy = np.asarray(spectra[:, j], float)
+        #galaxy = np.asarray(spectra[:, j], float)
         galaxy = np.where(np.isfinite(galaxy) & (galaxy>0), galaxy, mode(galaxy[np.isfinite(galaxy) & (galaxy>0)])[0])
  
-        variance_j = np.asarray(variance[:, j], float)
+        #variance_j = np.asarray(variance[:, j], float)
         lam_range_temp = np.exp(ln_lam_temp[[0, -1]])
         lam_lin = np.linspace(lam_range_temp[0], lam_range_temp[1], len(variance_j))
 
@@ -982,7 +979,7 @@ class GasKinematicsFitter:
         """
         results = Parallel(n_jobs=n_jobs, backend="loky", max_nbytes=max_nbytes, batch_size=batch_size)(
             delayed(GasKinematicsFitter._fit_single_gaussian_static)(
-                j, self.s.spectra, self.s.variance, self.sps.ln_lam_temp,
+                j, np.asarray(self.s.spectra[:,j], float), np.array(self.s.variance[:,j]), self.sps.ln_lam_temp,
                 self.lam_gal, self.bin_num, self.optimal_templates,
                 self.gas_templates_1, self.gas_names_1,
                 self.velbin, self.sigbin, self.h3, self.h4,
@@ -1020,7 +1017,7 @@ class GasKinematicsFitter:
             for i in range(npix):
                 f, e, v, s = self.line_results_1g[i].get(line, (0.0, 0.0, np.nan, np.nan))
                 flux_map[i] = f *dlam
-                err_map[i] = e
+                err_map[i] = e *dlam
                 vel_map[i] = v
                 sig_map[i] = s
  
