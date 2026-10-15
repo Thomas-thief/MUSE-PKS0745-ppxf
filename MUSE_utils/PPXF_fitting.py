@@ -3,16 +3,15 @@ from urllib import request
 
 from time import perf_counter as clock
 
-import math
-
 from astropy.io import fits
 import astropy.io.fits as pyfits
-from astropy.wcs import WCS
 
 import numpy as np
 from scipy.stats import mode 
 import matplotlib.pyplot as plt
 from joblib import Parallel, delayed
+import os, gc, shutil, tempfile
+from joblib.externals.loky import get_reusable_executor
 from tqdm import tqdm
 
 from ppxf.ppxf import ppxf, robust_sigma
@@ -20,13 +19,8 @@ import ppxf.ppxf_util as util
 import ppxf.sps_util as lib
 from vorbin.voronoi_2d_binning import voronoi_2d_binning
 from plotbin.display_bins import display_bins
-from plotbin.plot_velfield import plot_velfield
 
 from os import path
-import os
-import sys
-
-import fnmatch
 
 import warnings
 warnings.filterwarnings('ignore')
@@ -259,7 +253,7 @@ class stellar_kinematics:
                 mask, 
                 lam_gal, 
                 sps.lam_temp, 
-                plot=plot, quiet=False)
+                plot=plot, quiet=True)
             
             velbin[j], sigbin[j], h3[j], h4[j] = pp_stars.sol
             optimal_templates[:, j] = pp_stars.optimal_template
@@ -430,7 +424,7 @@ class GasKinematicsFitter:
     def _get_BIC_static(chi, dof, N):
         chi2 = chi * dof
         k = N - dof
-        return chi2 + k * np.log(N)
+        return chi2 + (k * np.log(N))
  
     @staticmethod
     def _get_Halpha_index_static(names, tag="Halpha_(1)"):
@@ -539,7 +533,7 @@ class GasKinematicsFitter:
                          total_sigma.reshape(naxis1,naxis2), np.sqrt(total_sigma_err2).reshape(naxis1,naxis2),], 
                         [f"{line_name}_flux", f"{line_name}_flux_err",
                          f"{line_name}_velocity", f"{line_name}_velocity_err",
-                         f"{line_name}_sigma", f"{line_name}_sigma_err",])
+                         f"{line_name}_sigma", f"{line_name}_sigma_err"])
 
  
     # ------------------------------------------------------------------
@@ -603,7 +597,7 @@ class GasKinematicsFitter:
         gas_templates_2, gas_names_2,
         n_lines, velbin, sigbin, h3, h4,
         velscale, lam_temp,
-        sn_min=80, dBIC_min=7, frac_min=0.1
+        sn_min=30, dBIC_min=7, frac_min=0.1 #cambio en el sn_min por ser muy alto y nunca hacer ajuste doble
     ):
         # Extract spectrum + noise
         #galaxy = np.asarray(spectra[:, j], float)
@@ -655,8 +649,8 @@ class GasKinematicsFitter:
         f1 = gas_flux1[idx_Ha1]
         e1 = gas_flux_error1[idx_Ha1]
         sn_Ha = f1 / e1 if e1 > 0 else 0.0
-        # if sn_Ha < sn_min:
-        #     return (pp1.gas_flux, pp1.gas_flux_error, pp1.gas_names, pp1.chi2, [1], pp1.component, pp1.sol, pp1.error)
+        if sn_Ha < sn_min:
+            return gas_flux1, gas_flux_error1, gas_names1, chi21, [1], component1, sol1, error1
  
         # -------------------------- 2-component fit -------------------------
         pp2 = GasKinematicsFitter._run_ppxf_fit_static(
@@ -665,7 +659,7 @@ class GasKinematicsFitter:
             n_lines, vk, sk, h3k, h4k, velscale, lam_gal, lam_temp)
         gas_flux2, gas_flux_error2, gas_names2, chi22, component2, sol2, error2, dof2 = pp2.gas_flux, pp2.gas_flux_error, pp2.gas_names, pp2.chi2, pp2.component, pp2.sol, pp2.error, pp2.dof
         del pp2
-        BIC2 = GasKinematicsFitter._get_BIC_static(chi21, dof1, len(galaxy))
+        BIC2 = GasKinematicsFitter._get_BIC_static(chi22, dof2, len(galaxy))
         dBIC = BIC1 - BIC2
  
         idx_Ha1_2 = GasKinematicsFitter._get_Halpha_index_static(gas_names2, "Halpha_(1)")
@@ -677,7 +671,7 @@ class GasKinematicsFitter:
         f2_2 = gas_flux2[idx_Ha2_2]
         frac = f2_2 / (f1_2 + f2_2) if (f1_2 + f2_2) > 0 else 0.0
  
-        if (sn_Ha >= sn_min) and (dBIC > dBIC_min) and (frac > frac_min):
+        if (frac > frac_min)and (dBIC > dBIC_min) :
             return gas_flux2, gas_flux_error2, gas_names2, chi22, [1, 2], component2, sol2, error2
         else:
             return gas_flux1, gas_flux_error1, gas_names1, chi21, [1], component1, sol1, error1
@@ -834,20 +828,75 @@ class GasKinematicsFitter:
     # ------------------------------------------------------------------
     # Run ALL spaxels in parallel
     # ------------------------------------------------------------------
-    def Fit_cube(self, n_jobs=-1, batch_size=40, max_nbytes="1M"):
+    @staticmethod
+    def _fit_chunk(idx, spectra, variance, ln_lam_temp, lam_gal, bin_num,
+                optimal_templates, gas_templates_1, gas_names_1,
+                gas_templates_2, gas_names_2, n_lines,
+                velbin, sigbin, h3, h4, velscale, lam_temp):
+        out = []
+        for j in idx:
+            out.append(GasKinematicsFitter._fit_single_spaxel_static(
+                j,
+                np.array(spectra[:, j],  dtype=float),   # copia desde el memmap
+                np.array(variance[:, j], dtype=float),
+                ln_lam_temp, lam_gal, bin_num, optimal_templates,
+                gas_templates_1, gas_names_1, gas_templates_2, gas_names_2,
+                n_lines, velbin, sigbin, h3, h4, velscale, lam_temp))
+        return out
+
+    
+    def Fit_cube(self, n_jobs=-1, batch_size=40, max_nbytes="1M", chunk_size=200):
         n_lines = len(self.gas_names_base)
+        N = len(self.s.x)
+        
+        # tmp = tempfile.mkdtemp(prefix="ppxf_")
+        # spectra = variance = opt_tmpl = gen = None
+
+        # def to_memmap(name, arr):
+        #     path = os.path.join(tmp, name + ".npy")
+        #     # Fortran order: arr[:, j] queda contiguo en disco
+        #     np.save(path, np.asfortranarray(arr, dtype=float))
+        #     return np.load(path, mmap_mode="r")
+
+        # try:
+        #     spectra  = to_memmap("spectra",  self.s.spectra)
+        #     variance = to_memmap("variance", self.s.variance)
+        #     opt_tmpl = to_memmap("opt_tmpl", self.optimal_templates)
+
+        #     chunks = [np.arange(i, min(i + chunk_size, N))
+        #             for i in range(0, N, chunk_size)]
+
+        #     gen = Parallel(n_jobs=n_jobs, backend="loky",
+        #                 batch_size=1, return_as="generator")(   # joblib >= 1.3
+        #         delayed(GasKinematicsFitter._fit_chunk)(
+        #             c, spectra, variance, self.sps.ln_lam_temp, self.lam_gal,
+        #             self.bin_num, opt_tmpl,
+        #             self.gas_templates_1, self.gas_names_1,
+        #             self.gas_templates_2, self.gas_names_2,
+        #             n_lines, self.velbin, self.sigbin, self.h3, self.h4,
+        #             self.s.velscale, self.sps.lam_temp)
+        #         for c in chunks)
+
+        #     results = []
+        #     for chunk_res in tqdm(gen, total=len(chunks), desc="Fitting gas spaxels"):
+        #         results.extend(chunk_res)          # el generador mantiene el orden
+        # finally:
+        #     # liberar los memmaps y cerrar los workers antes de borrar (Windows no
+        #     # deja borrar archivos que otro proceso tiene abiertos)
+        #     spectra = variance = opt_tmpl = gen = None
+        #     gc.collect()
+        #     get_reusable_executor().shutdown(wait=True)
+        #     shutil.rmtree(tmp, ignore_errors=True)
  
         results = Parallel(n_jobs=n_jobs, backend="loky", batch_size=batch_size, max_nbytes=max_nbytes)(
             delayed(GasKinematicsFitter._fit_single_spaxel_static)(
-                j,
-                np.asarray(self.s.spectra[:,j], float), np.array(self.s.variance[:,j]), self.sps.ln_lam_temp,
+                j, np.asarray(self.s.spectra[:,j], float), np.array(self.s.variance[:,j]), self.sps.ln_lam_temp,
                 self.lam_gal, self.bin_num, self.optimal_templates,
                 self.gas_templates_1, self.gas_names_1,
                 self.gas_templates_2, self.gas_names_2,
                 n_lines, self.velbin, self.sigbin, self.h3, self.h4,
-                self.s.velscale, self.sps.lam_temp
-            )
-            for j in tqdm(range(len(self.s.x)), desc="Fitting gas spaxels"))
+                self.s.velscale, self.sps.lam_temp)
+            for j in tqdm(range(N), desc="Fitting gas spaxels"))
  
         # dtype=object: cada spaxel puede tener 1 o 2 componentes activos,
         # así que gas_flux/gas_names/component/sol tienen largo VARIABLE
@@ -1036,6 +1085,108 @@ class GasKinematicsFitter:
     # Simple FITS writer
     # ------------------------------------------------------------------
     def _save_fits(self, datas=None, names_comp=None, name="MUSE_PKS0745_properties"):
+        with fits.open(self.s.outfolder+name+".fits") as hdu:
+            names = [hdu1.name for hdu1 in hdu]
         for i in range(len(names_comp)):
-            with fits.open(self.s.outfolder+name+".fits", mode="append") as hdu:
-                hdu.append(fits.ImageHDU(data=datas[i], name=f"{names_comp[i]}"))
+            if f"{names_comp[i]}" in names:
+                with fits.open(self.s.outfolder+name+".fits", mode="update") as hdu:
+                    hdu[f"{names_comp[i]}"].data = datas[i]
+            else:
+                with fits.open(self.s.outfolder+name+".fits", mode="append") as hdu:
+                    hdu.append(fits.ImageHDU(data=datas[i], name=f"{names_comp[i]}"))
+
+
+    def clip_map_velocity_gas(self, value_map, error_map, ha_clip, ha_err_clip, min_vel_err = 12):
+        # Evitar divisiones por cero
+        with np.errstate(divide='ignore', invalid='ignore'):
+            snr = np.abs(ha_clip / ha_err_clip)
+            # deviation = np.abs(value_map - np.nanmedian(value_map))
+
+        # Construir máscaras individuales
+        # mask_rel = rel_error > max_rel_error
+        # mask_dev = deviation_over_error > max_deviation_sigma
+        mask_snr = snr < 0.5
+        mask_vel = error_map > min_vel_err 
+        # mask_sigma = error_sigma > 3
+        
+        # Combinar todas las condiciones + NaNs
+        total_mask = mask_vel | mask_snr
+
+        # Aplicar máscara al mapa
+        clipped_map = np.where(total_mask, np.nan, value_map)
+
+        return clipped_map
+
+
+    def clip_map_sigma_gas(self, value_map, error_map, ha_clip, ha_err_clip, min_sig_err):
+
+        # Evitar divisiones por cero
+        with np.errstate(divide='ignore', invalid='ignore'):
+            snr = np.abs(ha_clip / ha_err_clip)
+            # deviation = np.abs(value_map - np.nanmedian(value_map))
+            # deviation_over_error = deviation / error_map
+
+        # Construir máscaras individuales
+        # mask_rel = rel_error > max_rel_error
+        # mask_dev = deviation_over_error > max_deviation_sigma
+        mask_snr = snr < 0.5
+        mask_sig = error_map > min_sig_err 
+        # mask_sigma = error_sigma > 3
+        
+        # Combinar todas las condiciones + NaNs
+        total_mask = mask_sig | mask_snr
+
+        # Aplicar máscara al mapa
+        clipped_map = np.where(total_mask, np.nan, value_map)
+
+        return clipped_map
+
+
+    def clip_map_flux(self, value_map, error_map, error_vel_gas, min_vel_err, error_sigma_gas, min_sigma_err):
+
+        # Evitar divisiones por cero
+        with np.errstate(divide='ignore', invalid='ignore'):
+            snr = np.abs(value_map / error_map)
+            # deviation = np.abs(value_map - np.nanmedian(value_map))
+            # deviation_over_error = deviation / error_map
+
+        # Construir máscaras individuales
+        mask_snr = snr < 5
+        # mask_chi2 =  (chi2 > 2)
+
+        mask_vel = error_vel_gas > min_vel_err 
+        mask_sigma = error_sigma_gas > min_sigma_err 
+        
+        # Combinar todas las condiciones + NaNs
+        total_mask = mask_vel  | mask_snr  | mask_sigma 
+
+        # Aplicar máscara al mapa
+        clipped_map = np.where(total_mask, np.nan, value_map)
+        return clipped_map
+
+
+    def Clip_maps(self, name_fits_properties="MUSE_PKS0745_properties.fits", min_vel_err=20, min_sigma_err=20):
+        gas_names_global = self.gas_names_all[0]
+        wavelength_map = self.build_wavelength_map(gas_names_global)
+        chi = np.sqrt(self.chi_all)
+        nx = self.s.header["NAXIS1"]
+        ny = self.s.header["NAXIS2"]
+        for line_name in wavelength_map.keys():
+            print(f"\nMap_clipping line: {line_name}")
+            with fits.open(name_fits_properties) as hdu:
+                flux = hdu[f"{line_name}_flux"].data.reshape(np.shape(chi))
+                flux_err = hdu[f"{line_name}_flux_err"].data.reshape(np.shape(chi))
+                vel = hdu[f"{line_name}_velocity"].data.reshape(np.shape(chi))
+                vel_err = hdu[f"{line_name}_velocity_err"].data.reshape(np.shape(chi))
+                sigma = hdu[f"{line_name}_sigma"].data.reshape(np.shape(chi))
+                sigma_err = hdu[f"{line_name}_sigma_err"].data.reshape(np.shape(chi))
+
+            map_gas_clipped = self.clip_map_flux(flux, flux_err*chi, vel_err*chi, min_vel_err, sigma_err*chi, min_sigma_err)
+            map_vel_gas_clipped = self.clip_map_velocity_gas(vel, vel_err, flux, flux_err, min_vel_err = 30)
+            map_sigma_gas_clipped = self.clip_map_sigma_gas(sigma, sigma_err, flux, flux_err, min_sig_err = 30)
+
+            self._save_fits([map_gas_clipped.reshape(nx, ny), map_vel_gas_clipped.reshape(nx, ny),
+                              map_sigma_gas_clipped.reshape(nx, ny)], 
+                            [f"{line_name}_map_flux_clipped", f"{line_name}_map_velocity_clipped",
+                             f"{line_name}_map_sigma_clipped"])
+            
