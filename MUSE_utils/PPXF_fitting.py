@@ -524,15 +524,15 @@ class GasKinematicsFitter:
             self._save_fits([flux_comp[comp].reshape(naxis1,naxis2), flux_err_comp[comp].reshape(naxis1,naxis2),
                              velocity_comp[comp].reshape(naxis1,naxis2), velocity_err_comp[comp].reshape(naxis1,naxis2),
                              sigma_comp[comp].reshape(naxis1,naxis2), sigma_err_comp[comp].reshape(naxis1,naxis2)], 
-                            [f"{line_name}_comp{comp}_flux", f"{line_name}_comp{comp}flux_err_comp",
-                             f"{line_name}_comp{comp}_velocity", f"{line_name}_comp{comp}velocity_err_comp",
-                             f"{line_name}_comp{comp}_sigma", f"{line_name}_comp{comp}sigma_err_comp"])
+                            [f"{line_name}_comp{comp}_flux", f"{line_name}_comp{comp}_flux_err_comp",
+                             f"{line_name}_comp{comp}_vel", f"{line_name}_comp{comp}_vel_err_comp",
+                             f"{line_name}_comp{comp}_sigma", f"{line_name}_comp{comp}_sigma_err_comp"])
 
         self._save_fits([total_flux.reshape(naxis1,naxis2), np.sqrt(total_flux_err2).reshape(naxis1,naxis2),
                          total_velocity.reshape(naxis1,naxis2), np.sqrt(total_velocity_err2).reshape(naxis1,naxis2),
                          total_sigma.reshape(naxis1,naxis2), np.sqrt(total_sigma_err2).reshape(naxis1,naxis2),], 
                         [f"{line_name}_flux", f"{line_name}_flux_err",
-                         f"{line_name}_velocity", f"{line_name}_velocity_err",
+                         f"{line_name}_vel", f"{line_name}_vel_err",
                          f"{line_name}_sigma", f"{line_name}_sigma_err"])
 
  
@@ -671,7 +671,7 @@ class GasKinematicsFitter:
         f2_2 = gas_flux2[idx_Ha2_2]
         frac = f2_2 / (f1_2 + f2_2) if (f1_2 + f2_2) > 0 else 0.0
  
-        if (frac > frac_min)and (dBIC > dBIC_min) :
+        if (frac > frac_min) and (dBIC > dBIC_min) :
             return gas_flux2, gas_flux_error2, gas_names2, chi22, [1, 2], component2, sol2, error2
         else:
             return gas_flux1, gas_flux_error1, gas_names1, chi21, [1], component1, sol1, error1
@@ -734,17 +734,11 @@ class GasKinematicsFitter:
         naxis2 = self.s.header['NAXIS2']
         npix = naxis1*naxis2
 
-        flux_err_comp  = {1:np.zeros(npix), 2:np.zeros(npix)}
-        velocity_comp = {1:np.zeros(npix), 2:np.zeros(npix)}
-        velocity_err_comp  = {1:np.zeros(npix), 2:np.zeros(npix)}
-        sigma_comp = {1:np.zeros(npix), 2:np.zeros(npix)}
-        sigma_err_comp  = {1:np.zeros(npix), 2:np.zeros(npix)}
-
         vmap = np.zeros(npix)
         sigmap = np.zeros(npix)
+        fluxmap_err = np.zeros(npix)
         vmap_err = np.zeros(npix)
         sigmap_err = np.zeros(npix)
-        fluxmap_err = np.zeros(npix)
 
         # f_list = np.full(npix, 0)
         # for i in range(npix):
@@ -768,7 +762,7 @@ class GasKinematicsFitter:
             if len(local_idxs)==0:
                 continue
 
-            f_list=[]; v_list=[]; s_list=[]; ev_list=[]; es_list=[]; ef_list=[]
+            f_list=[]; v_list=[]; s_list=[];  ef_list=[]; ev_list=[]; es_list=[]
 
             for j in local_idxs:
                 comp = int(self.gas_names_all[i][j].split("(")[1].split(")")[0])
@@ -787,14 +781,8 @@ class GasKinematicsFitter:
                 ev = self.error_all[i][kin][0]
                 es = self.error_all[i][kin][1]
 
-                flux_err_comp[comp][i]  = f
-                velocity_comp[comp][i] = v
-                velocity_err_comp[comp][i]  = ev
-                sigma_comp[comp][i] = s
-                sigma_err_comp[comp][i]  = es
-
                 f_list.append(f); v_list.append(v); s_list.append(s)
-                ev_list.append(ev); es_list.append(es); ef_list.append(ef)
+                ef_list.append(ef); ev_list.append(ev); es_list.append(es)
 
             if len(f_list)==0:
                 continue
@@ -814,11 +802,12 @@ class GasKinematicsFitter:
             sigma_tot = np.sqrt(np.sum(weight_comp * s**2)) #resultado
             e_sigma_tot = np.sqrt(np.sum((weight_comp * s / sigma_tot * es)**2)) #resultado
             
+            fluxmap_err[i] = e_f_tot* np.sqrt(self.chi_all[i])
             vmap[i] = v_tot
             vmap_err[i] = e_v_tot* np.sqrt(self.chi_all[i])
             sigmap[i] = sigma_tot
             sigmap_err[i] = e_sigma_tot* np.sqrt(self.chi_all[i])
-            fluxmap_err[i] = e_f_tot* np.sqrt(self.chi_all[i])
+
 
         return (vmap.reshape(naxis1,naxis2), sigmap.reshape(naxis1,naxis2),
                 vmap_err.reshape(naxis1,naxis2),sigmap_err.reshape(naxis1,naxis2),
@@ -933,8 +922,8 @@ class GasKinematicsFitter:
             v, s, ve, se, fe = self.weighted_kinematics_v2("Halpha")
             self._save_fits([v,s, ve, se, fe], 
             ["Halpha_vel_weighted", "Halpha_sigma_weighted", 
-             "Halpha_vel_error_weighted", "Halpha_sigma_error_weighted",
-             "Halpha_fluxes_weighted"])
+             "Halpha_vel_err_weighted", "Halpha_sigma_err_weighted",
+             "Halpha_flux_err_weighted"])
 
 
     # ===================================================================
@@ -1113,7 +1102,7 @@ class GasKinematicsFitter:
         total_mask = mask_vel | mask_snr
 
         # Aplicar máscara al mapa
-        clipped_map = np.where(total_mask, np.nan, value_map)
+        clipped_map = np.where(total_mask, 0, value_map)
 
         return clipped_map
 
@@ -1137,7 +1126,7 @@ class GasKinematicsFitter:
         total_mask = mask_sig | mask_snr
 
         # Aplicar máscara al mapa
-        clipped_map = np.where(total_mask, np.nan, value_map)
+        clipped_map = np.where(total_mask, 1, value_map)
 
         return clipped_map
 
@@ -1151,7 +1140,7 @@ class GasKinematicsFitter:
             # deviation_over_error = deviation / error_map
 
         # Construir máscaras individuales
-        mask_snr = snr < 5
+        mask_snr = snr < 10
         # mask_chi2 =  (chi2 > 2)
 
         mask_vel = error_vel_gas > min_vel_err 
@@ -1161,11 +1150,11 @@ class GasKinematicsFitter:
         total_mask = mask_vel  | mask_snr  | mask_sigma 
 
         # Aplicar máscara al mapa
-        clipped_map = np.where(total_mask, np.nan, value_map)
+        clipped_map = np.where(total_mask, 0, value_map)
         return clipped_map
 
 
-    def Clip_maps(self, name_fits_properties="MUSE_PKS0745_properties.fits", min_vel_err=20, min_sigma_err=20):
+    def Clip_maps(self, use_weighted = ["Halpha"] , name_fits_properties="MUSE_PKS0745_properties.fits", min_vel_err=30, min_sigma_err=30):
         gas_names_global = self.gas_names_all[0]
         wavelength_map = self.build_wavelength_map(gas_names_global)
         chi = np.sqrt(self.chi_all)
@@ -1173,20 +1162,29 @@ class GasKinematicsFitter:
         ny = self.s.header["NAXIS2"]
         for line_name in wavelength_map.keys():
             print(f"\nMap_clipping line: {line_name}")
-            with fits.open(name_fits_properties) as hdu:
-                flux = hdu[f"{line_name}_flux"].data.reshape(np.shape(chi))
-                flux_err = hdu[f"{line_name}_flux_err"].data.reshape(np.shape(chi))
-                vel = hdu[f"{line_name}_velocity"].data.reshape(np.shape(chi))
-                vel_err = hdu[f"{line_name}_velocity_err"].data.reshape(np.shape(chi))
-                sigma = hdu[f"{line_name}_sigma"].data.reshape(np.shape(chi))
-                sigma_err = hdu[f"{line_name}_sigma_err"].data.reshape(np.shape(chi))
+            if line_name in use_weighted:
+                with fits.open(name_fits_properties) as hdu:
+                    flux = hdu[f"{line_name}_flux"].data.reshape(np.shape(chi))
+                    flux_err = hdu[f"{line_name}_flux_err_weighted"].data.reshape(np.shape(chi))
+                    vel = hdu[f"{line_name}_vel_weighted"].data.reshape(np.shape(chi))
+                    vel_err = hdu[f"{line_name}_vel_err_weighted"].data.reshape(np.shape(chi))
+                    sigma = hdu[f"{line_name}_sigma_weighted"].data.reshape(np.shape(chi))
+                    sigma_err = hdu[f"{line_name}_sigma_err_weighted"].data.reshape(np.shape(chi))
+            else:
+                with fits.open(name_fits_properties) as hdu:
+                    flux = hdu[f"{line_name}_flux"].data.reshape(np.shape(chi))
+                    flux_err = hdu[f"{line_name}_flux_err"].data.reshape(np.shape(chi))
+                    vel = hdu[f"{line_name}_vel"].data.reshape(np.shape(chi))
+                    vel_err = hdu[f"{line_name}_vel_err"].data.reshape(np.shape(chi))
+                    sigma = hdu[f"{line_name}_sigma"].data.reshape(np.shape(chi))
+                    sigma_err = hdu[f"{line_name}_sigma_err"].data.reshape(np.shape(chi))
 
             map_gas_clipped = self.clip_map_flux(flux, flux_err*chi, vel_err*chi, min_vel_err, sigma_err*chi, min_sigma_err)
-            map_vel_gas_clipped = self.clip_map_velocity_gas(vel, vel_err, flux, flux_err, min_vel_err = 30)
-            map_sigma_gas_clipped = self.clip_map_sigma_gas(sigma, sigma_err, flux, flux_err, min_sig_err = 30)
+            map_vel_gas_clipped = self.clip_map_velocity_gas(vel, vel_err, flux, flux_err, min_vel_err)
+            map_sigma_gas_clipped = self.clip_map_sigma_gas(sigma, sigma_err, flux, flux_err, min_sigma_err)
 
             self._save_fits([map_gas_clipped.reshape(nx, ny), map_vel_gas_clipped.reshape(nx, ny),
                               map_sigma_gas_clipped.reshape(nx, ny)], 
-                            [f"{line_name}_map_flux_clipped", f"{line_name}_map_velocity_clipped",
+                            [f"{line_name}_map_flux_clipped", f"{line_name}_map_vel_clipped",
                              f"{line_name}_map_sigma_clipped"])
             
