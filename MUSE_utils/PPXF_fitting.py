@@ -1080,9 +1080,11 @@ class GasKinematicsFitter:
             if f"{names_comp[i]}" in names:
                 with fits.open(self.s.outfolder+name+".fits", mode="update") as hdu:
                     hdu[f"{names_comp[i]}"].data = datas[i]
+                    hdu.flush()
             else:
                 with fits.open(self.s.outfolder+name+".fits", mode="append") as hdu:
                     hdu.append(fits.ImageHDU(data=datas[i], name=f"{names_comp[i]}"))
+                    hdu.flush()
 
 
     def clip_map_velocity_gas(self, value_map, error_map, ha_clip, ha_err_clip, min_vel_err = 12):
@@ -1154,7 +1156,7 @@ class GasKinematicsFitter:
         return clipped_map
 
 
-    def Clip_maps(self, use_weighted = ["Halpha"] , name_fits_properties="MUSE_PKS0745_properties.fits", min_vel_err=30, min_sigma_err=30):
+    def Clip_maps(self, use_weighted = ["Halpha"] , name_fits_properties="MUSE_PKS0745_properties.fits", min_vel_err=22, min_sigma_err=22):
         gas_names_global = self.gas_names_all[0]
         wavelength_map = self.build_wavelength_map(gas_names_global)
         chi = np.sqrt(self.chi_all)
