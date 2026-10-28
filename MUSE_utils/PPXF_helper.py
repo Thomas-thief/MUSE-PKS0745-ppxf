@@ -265,14 +265,14 @@ def emission_lines(ln_lam_temp, lam_range_gal, FWHM_gal, pixel=True,
 
     # To keep the flux ratio of a doublet fixed, we place the two lines in a single template
     #        -----[OIII]-----
-    #wave = [4960.295, 5008.240]    # vacuum wavelengths
-    #if not vacuum:
-     #   wave = util.vac_to_air(wave)
-    #doublet = util.gaussian(ln_lam_temp, wave, FWHM_gal1, pixel) @ [0.33, 1]
-    #emission_lines = np.column_stack([emission_lines, doublet])
+    wave = [4960.295, 5008.240]    # vacuum wavelengths
+    if not vacuum:
+       wave = util.vac_to_air(wave)
+    doublet = util.gaussian(ln_lam_temp, wave, FWHM_gal1, pixel) @ [0.33, 1]
+    emission_lines = np.column_stack([emission_lines, doublet])
     # single template for this doublet
-    #line_names = np.append(line_names, '[OIII]5007_d')
-    #line_wave = np.append(line_wave, wave[1])
+    line_names = np.append(line_names, '[OIII]5007_d')
+    line_wave = np.append(line_wave, wave[1])
 
     # To keep the flux ratio of a doublet fixed, we place the two lines in a single template
     #        -----[OI]-----
@@ -287,15 +287,15 @@ def emission_lines(ln_lam_temp, lam_range_gal, FWHM_gal, pixel=True,
 
     # To keep the flux ratio of a doublet fixed, we place the two lines in a single template
     #       -----[NII]-----
-    #wave = [6549.860, 6585.271]    # air wavelengths
-    #if not vacuum:
-    #    wave = util.vac_to_air(wave)
-    #doublet = util.gaussian(ln_lam_temp, wave, FWHM_gal1, pixel) @ [0.33, 1]
-    #emission_lines = np.column_stack([emission_lines, doublet])
+    wave = [6549.860, 6585.271]    # air wavelengths
+    if not vacuum:
+       wave = util.vac_to_air(wave)
+    doublet = util.gaussian(ln_lam_temp, wave, FWHM_gal1, pixel) @ [0.33, 1]
+    emission_lines = np.column_stack([emission_lines, doublet])
 
     # single template for this doublet
-    #line_names = np.append(line_names, '[NII]6583_d')
-    #line_wave = np.append(line_wave, wave[1])
+    line_names = np.append(line_names, '[NII]6583_d')
+    line_wave = np.append(line_wave, wave[1])
 
     # Only include lines falling within the estimated fitted wavelength range.
     #
@@ -334,12 +334,14 @@ def determine_mask(ln_lam, lam_range_temp, redshift=0.08191, width=800):
 
     flag = False
     for line, dvj in zip(lines, dv):
-        flag |= (ln_lam > np.log(line*(1 + redshift)) - dvj/c) \
-            & (ln_lam < np.log(line*(1 + redshift)) + dvj/c)
+        flag |= (ln_lam > np.log(line) - dvj/c) \
+            & (ln_lam < np.log(line) + dvj/c)
+    #     flag |= (ln_lam > np.log(line/(1 + redshift)) - dvj/c) \
+    # & (ln_lam < np.log(line/(1 + redshift)) + dvj/c)
 
     # Mask edges of stellar library
-    flag |= ln_lam > np.log(lam_range_temp[1]*(1 + redshift)) - 900/c
-    flag |= ln_lam < np.log(lam_range_temp[0]*(1 + redshift)) + 900/c
+    flag |= ln_lam > np.log(lam_range_temp[1]) - 900/c
+    flag |= ln_lam < np.log(lam_range_temp[0]) + 900/c
 
     return ~flag
 
@@ -388,6 +390,7 @@ class read_data_cube:
             self.cubevar, _ = cut_cube_simple(self.cubevar, self.header, rango_y, rango_x)
 
         # Only use the specified rest-frame wavelength range
+        self.redshift = redshift
         wave = self.wave/(1 + redshift)      # de-redshift the spectrum
         w = (wave > lam_range[0]) & (wave < lam_range[1])
         wave = wave[w]
@@ -509,6 +512,7 @@ def ppxf_fit_and_clean(templates, galaxy, noise, velscale, start, mask0, lam, la
     the outliers. The general approach used in this function is described in
     Sec.6.5 of Cappellari (2023) https://ui.adsabs.harvard.edu/abs/2023MNRAS.526.3273C
     """
+    print(velscale)
     mask = mask0.copy()
     pp = ppxf(templates, galaxy, noise, velscale, start,
               moments=4, degree=10, mdegree=-1, lam=lam, lam_temp=lam_temp,

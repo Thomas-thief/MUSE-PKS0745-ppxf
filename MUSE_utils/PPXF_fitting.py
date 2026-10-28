@@ -171,6 +171,49 @@ class stellar_kinematics:
         )[0]
         plt.show()
 
+    @staticmethod
+    def _fit_voronoi_static(j, bin_num, nbins, s_spectra, s_variance, sps, lam_gal, mask0, s_velscale, s_start, sps_name, s_outfolder, plot=True):
+        print(f"{j+1} / {range(nbins)[-1]+1}----------------------------------------------")
+        w = bin_num == j
+        galaxy = np.nanmean(s_spectra[:, w], 1)
+        #galaxy = np.where(np.isfinite(galaxy), galaxy, mode(galaxy[np.isfinite(galaxy)])[0]) # importante cambiar 
+        galaxy_normalized = galaxy/np.nanmedian(galaxy)     # Normalize spectrum to avoid numerical issues
+
+        # Interpolate variance to log-rebinned scale
+        variance = np.nanmean(s_variance[:, w], 1) # importante cambiar
+        #variance = np.where(np.isfinite(variance) & (variance>0), variance, mode(variance[np.isfinite(variance) & (variance>0)])[0])        
+        lam_range_temp = np.exp(sps.ln_lam_temp[[0, -1]])
+        lam_lin = np.linspace(lam_range_temp[0], lam_range_temp[1], len(variance))
+        variance_log = np.interp(lam_gal, lam_lin, variance)
+        noise_log = np.sqrt(variance_log)
+        noise = noise_log/np.nanmedian(galaxy)
+        #noise = (np.nanmean(s.noise))/np.nanmedian(galaxy_normalized)
+        #noise = np.full_like(galaxy_normalized,noise)
+        mask = mask0 & np.isfinite(galaxy) & np.isfinite(variance)
+        pp_stars = ph.ppxf_fit_and_clean(
+            sps.templates, 
+            galaxy_normalized, 
+            noise, 
+            s_velscale, 
+            s_start, 
+            mask, 
+            lam_gal, 
+            sps.lam_temp, 
+            plot=plot, quiet=True)
+        
+        velbin_j, sigbin_j, h3_j, h4_j = pp_stars.sol
+        optimal_templates_j = pp_stars.optimal_template
+        if plot:
+            txt = f"Voronoi bin {j+1} / {nbins}; SPS: {sps_name}; $\sigma$={sigbin_j:.0f} km/s; S/N={pp_stars.sn:.1f}"
+            print(txt + '\n' + '#'*78)
+            plt.title(txt)
+            plt.savefig(s_outfolder+f'Stellar_fitting_example_{j+1}.png',dpi=300)
+            plt.close()
+        # light_weights = pp_stars.weights.reshape(reg_dim)
+        # lg_age_bin_j, metalbin_j = sps.mean_age_metal(light_weights, quiet=not plot)
+    
+        return velbin_j, sigbin_j, h3_j, h4_j, optimal_templates_j #, lg_age_bin_j, metalbin_j
+
     def setup_stellar_kinematics(self):
         """Setup stellar templates using the stored data."""
         print("Setting up stellar templates...")
@@ -204,7 +247,7 @@ class stellar_kinematics:
 
         lam_range_temp = np.exp(sps.ln_lam_temp[[0, -1]])
         #mask0 = util.determine_mask(s.ln_lam_gal, lam_range_temp, width=1000)
-        mask0 = ph.determine_mask(s.ln_lam_gal, lam_range_temp, width=self.width_lines)
+        mask0 = ph.determine_mask(s.ln_lam_gal, lam_range_temp, redshift=self.s.redshift, width=self.width_lines)
 
         # Define the region to mask, e.g. 6850–6950 Å
 
@@ -219,59 +262,21 @@ class stellar_kinematics:
         mask0 = mask0 & good_custom     # Logical AND → both must be valid
 
         # Option 2: set error to zero (pPXF will skip those pixels)
-        goodpixels = np.where(~mask_region)[0]
+        #goodpixels = np.where(~mask_region)[0]
 
         nbins = np.unique(bin_num).size
-        velbin, sigbin, lg_age_bin, metalbin, nspax, h3, h4 = np.zeros((7, nbins))
-        optimal_templates = np.empty((npix, nbins))
 
-        for j in range(nbins):
-            print(f"{j+1} / {range(nbins)[-1]+1}----------------------------------------------")
-            plot = True
-            w = bin_num == j
-            galaxy = np.nanmean(s.spectra[:, w], 1)
-            #galaxy = np.where(np.isfinite(galaxy), galaxy, mode(galaxy[np.isfinite(galaxy)])[0]) # importante cambiar 
-            galaxy_normalized = galaxy/np.nanmedian(galaxy)     # Normalize spectrum to avoid numerical issues
-
-            # Interpolate variance to log-rebinned scale
-            variance = np.nanmean(s.variance[:, w], 1) # importante cambiar
-            #variance = np.where(np.isfinite(variance) & (variance>0), variance, mode(variance[np.isfinite(variance) & (variance>0)])[0])        
-            lam_range_temp = np.exp(sps.ln_lam_temp[[0, -1]])
-            lam_lin = np.linspace(lam_range_temp[0], lam_range_temp[1], len(variance))
-            variance_log = np.interp(lam_gal, lam_lin, variance)
-            noise_log = np.sqrt(variance_log)
-            noise = noise_log/np.nanmedian(galaxy)
-            #noise = (np.nanmean(s.noise))/np.nanmedian(galaxy_normalized)
-            #noise = np.full_like(galaxy_normalized,noise)
-            mask = mask0 & np.isfinite(galaxy) & np.isfinite(variance)
-            pp_stars = ph.ppxf_fit_and_clean(
-                sps.templates, 
-                galaxy_normalized, 
-                noise, 
-                s.velscale, 
-                s.start, 
-                mask, 
-                lam_gal, 
-                sps.lam_temp, 
-                plot=plot, quiet=True)
-            
-            velbin[j], sigbin[j], h3[j], h4[j] = pp_stars.sol
-            optimal_templates[:, j] = pp_stars.optimal_template
-            if plot:
-                txt = f"Voronoi bin {j+1} / {nbins}; SPS: {sps_name}; $\sigma$={sigbin[j]:.0f} km/s; S/N={pp_stars.sn:.1f}"
-                print(txt + '\n' + '#'*78)
-                plt.title(txt)
-                plt.savefig(self.s.outfolder+f'Stellar_fitting_example_{j+1}.png',dpi=300)
-                plt.close()
-            light_weights = pp_stars.weights.reshape(reg_dim)
-            lg_age_bin[j], metalbin[j] = sps.mean_age_metal(light_weights, quiet=not plot)
+        results = Parallel(n_jobs=8, backend="loky")(
+                    delayed(stellar_kinematics._fit_voronoi_static)
+                    (j, bin_num, nbins, s.spectra, s.variance, sps, lam_gal, mask0, s.velscale, s.start, sps_name, s.outfolder, plot=True)
+                    for j in tqdm(range(nbins), desc="Fitting stellar kinematics voronoi"))
         
-        self.optimal_templates = optimal_templates
-        self.velbin = velbin
-        self.sigbin = sigbin
-        self.h3 = h3
-        self.h4 = h4
-        self.pp_stars = pp_stars
+        self.velbin = np.array([r[0] for r in results])
+        self.sigbin = np.array([r[1] for r in results])
+        self.h3 =     np.array([r[2] for r in results])
+        self.h4 =     np.array([r[3] for r in results])
+        self.optimal_templates = np.reshape(np.array([r[4] for r in results]), (npix, nbins))
+        #self.pp_stars = pp_stars
 
         # light_weights = pp_stars.weights.reshape(reg_dim)
         # lg_age_bin[j], metalbin[j] = sps.mean_age_metal(light_weights, quiet=not plot)
@@ -286,12 +291,12 @@ class stellar_kinematics:
         plt.subplots_adjust(wspace=0.5)
 
         plt.subplot(121)
-        display_bins(x_arcsec, y_arcsec, bin_num, velbin, colorbar=1, label='V (km/s)', pixelsize=pixelsize)
+        display_bins(x_arcsec, y_arcsec, bin_num, self.velbin, colorbar=1, label='V (km/s)', pixelsize=pixelsize)
         #plt.tricontour(s.x, s.y, -2.5*np.log10(signal/np.max(signal).ravel()), levels=np.arange(20));  # 1 mag contours
 
         plt.subplot(122)
         #sigbin = np.array(replace_invalid(noise,np.nanmean(sigbin)))
-        display_bins(x_arcsec, y_arcsec, bin_num, sigbin, colorbar=1, cmap='inferno', label='Vsigma (yr)', pixelsize=pixelsize)
+        display_bins(x_arcsec, y_arcsec, bin_num, self.sigbin, colorbar=1, cmap='inferno', label='Vsigma (yr)', pixelsize=pixelsize)
         #plt.tricontour(s.x, s.y, -2.5*np.log10(signal/np.max(signal).ravel()), levels=np.arange(20));  # 1 mag contours
 
         plt.tight_layout()
@@ -1165,6 +1170,7 @@ class GasKinematicsFitter:
         for line_name in wavelength_map.keys():
             print(f"\nMap_clipping line: {line_name}")
             if line_name in use_weighted:
+                print("\nWeighted used")
                 with fits.open(name_fits_properties) as hdu:
                     flux = hdu[f"{line_name}_flux"].data.reshape(np.shape(chi))
                     flux_err = hdu[f"{line_name}_flux_err_weighted"].data.reshape(np.shape(chi))
