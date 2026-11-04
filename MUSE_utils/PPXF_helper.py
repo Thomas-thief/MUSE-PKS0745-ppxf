@@ -251,11 +251,18 @@ def emission_lines(ln_lam_temp, lam_range_gal, FWHM_gal, pixel=True,
     # Here the lines are free to have any ratio ### #I Modified this part of the code  ###################################
     #       -----[NeIII]-----    HeII      HeI -[N II] λ5755 -  [OII] 7319 - [OII] 7330 - SIII_9069 - SIII_9532  - [Ar III]7135.8  - [O III] λ4363 - [Ca II] λ7291    - [Ca II] λ7323    - [N I] λ5198 - 5197.90 Å - [N I] λ5200 → 5200.26 Å
 
-    wave = [6549.860, 6585.271,4960.295, 5008.240, 3968.59, 3869.86, 4687.015, 5877.243, 7319, 7330,9069 ,9532, 7135.8,5755, 4363 ,7291.47,7323.89,5197.90,5200.26,9014.909,8862.782,8891.910,9068.600]  # vacuum wavelengths
+    wave = [3968.59, 3869.86, 4687.015, 5877.243,
+    7319, 7330, 9069, 9532, 7135.8,
+    5755, 4363, 7291.47, 7323.89,
+    5197.90, 5200.26, 9014.909,
+    8862.782, 8891.910, 9068.600]
     if not vacuum:
         wave = util.vac_to_air(wave)
-    names = ['[NII]6548','[NII]6584','[OIII]4959','[OIII]5007','[NeIII]3968', '[NeIII]3869', 'HeII4687', 'HeI5876','[OII]7319','[OII]7330','[SIII]9069','[SIII]9532','[ArIII]7135','[NII]5755','[OIII]4363','[CaII]7291','[CaII]7323','[NI]5198','[NI]5200','Pa10','Pa11','[FeII]8891','[SIII]9068']
-    
+    names = ['[NeIII]3968', '[NeIII]3869', 'HeII4687', 'HeI5876',
+    '[OII]7319', '[OII]7330', '[SIII]9069', '[SIII]9532',
+    '[ArIII]7135', '[NII]5755', '[OIII]4363',
+    '[CaII]7291', '[CaII]7323', '[NI]5198', '[NI]5200',
+    'Pa10', 'Pa11', '[FeII]8891', '[SIII]9068']
     gauss = util.gaussian(ln_lam_temp, wave, FWHM_gal1, pixel)
     emission_lines = np.column_stack([emission_lines, gauss])
     line_names = np.append(line_names, names)
@@ -336,8 +343,8 @@ def determine_mask(ln_lam, lam_range_temp, redshift=0.08191, width=800):
     for line, dvj in zip(lines, dv):
         flag |= (ln_lam > np.log(line) - dvj/c) \
             & (ln_lam < np.log(line) + dvj/c)
-    #     flag |= (ln_lam > np.log(line/(1 + redshift)) - dvj/c) \
-    # & (ln_lam < np.log(line/(1 + redshift)) + dvj/c)
+    #    flag |= (ln_lam > np.log(line*(1 + redshift)) - dvj/c) \
+    #    & (ln_lam < np.log(line*(1 + redshift)) + dvj/c)
 
     # Mask edges of stellar library
     flag |= ln_lam > np.log(lam_range_temp[1]) - 900/c
