@@ -172,8 +172,8 @@ class stellar_kinematics:
         plt.show()
 
     @staticmethod
-    def _fit_voronoi_static(j, bin_num, nbins, s_spectra, s_variance, sps, lam_gal, mask0, s_velscale, s_start, sps_name, s_outfolder, plot=True):
-        print(f"{j+1} / {range(nbins)[-1]+1}----------------------------------------------")
+    def _fit_voronoi_static(j, bin_num, nbins, s_spectra, s_variance, sps, lam_gal, mask0, s_velscale, s_start, sps_name, s_outfolder):
+        #print(f"{j+1} / {range(nbins)[-1]+1}----------------------------------------------")
         w = bin_num == j
         galaxy = np.nanmean(s_spectra[:, w], 1)
         #galaxy = np.where(np.isfinite(galaxy), galaxy, mode(galaxy[np.isfinite(galaxy)])[0]) # importante cambiar 
@@ -190,6 +190,7 @@ class stellar_kinematics:
         #noise = (np.nanmean(s.noise))/np.nanmedian(galaxy_normalized)
         #noise = np.full_like(galaxy_normalized,noise)
         mask = mask0 & np.isfinite(galaxy) & np.isfinite(variance)
+        plot = (j % 200 == 0)
         pp_stars = ph.ppxf_fit_and_clean(
             sps.templates, 
             galaxy_normalized, 
@@ -205,9 +206,9 @@ class stellar_kinematics:
         optimal_templates_j = pp_stars.optimal_template
         if plot:
             txt = f"Voronoi bin {j+1} / {nbins}; SPS: {sps_name}; $\sigma$={sigbin_j:.0f} km/s; S/N={pp_stars.sn:.1f}"
-            print(txt + '\n' + '#'*78)
+            #print(txt + '\n' + '#'*78)
             plt.title(txt)
-            plt.savefig(s_outfolder+f'Stellar_fitting_example_{j+1}.png',dpi=300)
+            plt.savefig(s_outfolder+"fit_stellar/"+f'Stellar_fitting_example_{j+1}.png',dpi=300)
             plt.close()
         # light_weights = pp_stars.weights.reshape(reg_dim)
         # lg_age_bin_j, metalbin_j = sps.mean_age_metal(light_weights, quiet=not plot)
@@ -268,7 +269,7 @@ class stellar_kinematics:
 
         results = Parallel(n_jobs=8, backend="loky")(
                     delayed(stellar_kinematics._fit_voronoi_static)
-                    (j, bin_num, nbins, s.spectra, s.variance, sps, lam_gal, mask0, s.velscale, s.start, sps_name, s.outfolder, plot=True)
+                    (j, bin_num, nbins, s.spectra, s.variance, sps, lam_gal, mask0, s.velscale, s.start, sps_name, s.outfolder)
                     for j in tqdm(range(nbins), desc="Fitting stellar kinematics voronoi"))
         
         self.velbin = np.array([r[0] for r in results])
@@ -545,11 +546,11 @@ class GasKinematicsFitter:
     # Helper to run 1- or 2-component pPXF
     # ------------------------------------------------------------------
     @staticmethod
-    def _run_ppxf_fit_static(template, gas_templates, gas_names,
+    def _run_ppxf_fit_static(j, template, gas_templates, gas_names,
                               galaxy, noise, goodpixels,
                               use_two_components,
                               n_lines, velbin_k, sigbin_k, h3_k, h4_k,
-                              velscale, lam_gal, lam_temp):
+                              velscale, lam_gal, lam_temp, outfolder):
  
         if use_two_components:
             component = [0] + [1] * n_lines + [2] * n_lines
@@ -570,7 +571,9 @@ class GasKinematicsFitter:
             fixed = [[1, 1, 1, 1], [0, 0]]
  
         gas_comp_flag = np.array(component) > 0
- 
+
+        plot = (j % 100 == 0)
+        plt.figure(figsize=(20, 3))
         pp = ppxf(
             templates=np.column_stack([template, gas_templates]),
             galaxy=galaxy,
@@ -585,9 +588,14 @@ class GasKinematicsFitter:
             gas_names=gas_names,
             lam=lam_gal,
             lam_temp=lam_temp,
-            degree=-1, mdegree=10,
-            quiet=True, plot=False
+            degree=9, mdegree=-1,
+            quiet=True, plot=plot
         )
+        if plot:
+            txt = f"pixel {j+1}; Gas fitting"
+            plt.title(txt)
+            plt.savefig(outfolder+"fit_gas/"+f'Gas_fitting_example_{j+1}.png',dpi=250)
+            plt.close()
         return pp
  
 
@@ -602,7 +610,7 @@ class GasKinematicsFitter:
         gas_templates_2, gas_names_2,
         n_lines, velbin, sigbin, h3, h4,
         velscale, lam_temp,
-        sn_min=30, dBIC_min=7, frac_min=0.1 #cambio en el sn_min por ser muy alto y nunca hacer ajuste doble
+        sn_min, outfolder, dBIC_min=7, frac_min=0.1 #cambio en el sn_min por ser muy alto y nunca hacer ajuste doble
     ):
         # Extract spectrum + noise
         #galaxy = np.asarray(spectra[:, j], float)
@@ -634,21 +642,20 @@ class GasKinematicsFitter:
         vk, sk, h3k, h4k = velbin[kbin], sigbin[kbin], h3[kbin], h4[kbin]
  
         # -------------------------- 1-component fit -------------------------
-        pp1 = GasKinematicsFitter._run_ppxf_fit_static(
+        pp1 = GasKinematicsFitter._run_ppxf_fit_static(j,
             template, gas_templates_1, gas_names_1,
             galaxy, noise, goodpixels, False,
-            n_lines, vk, sk, h3k, h4k, velscale, lam_gal, lam_temp)
+            n_lines, vk, sk, h3k, h4k, velscale, lam_gal, lam_temp,outfolder)
         gas_flux1, gas_flux_error1, gas_names1, chi21, component1, sol1, error1, dof1 = pp1.gas_flux, pp1.gas_flux_error, pp1.gas_names, pp1.chi2, pp1.component, pp1.sol, pp1.error, pp1.dof
         del pp1
         BIC1 = GasKinematicsFitter._get_BIC_static(chi21, dof1, len(galaxy))
  
         idx_Ha1 = GasKinematicsFitter._get_Halpha_index_static(gas_names1, "Halpha_(1)")
         if idx_Ha1 is None:
-            pp2 = GasKinematicsFitter._run_ppxf_fit_static(
+            pp2 = GasKinematicsFitter._run_ppxf_fit_static(j,
                 template, gas_templates_2, gas_names_2,
                 galaxy, noise, goodpixels, True,
-                n_lines, vk, sk, h3k, h4k, velscale, lam_gal, lam_temp
-            )
+                n_lines, vk, sk, h3k, h4k, velscale, lam_gal, lam_temp, outfolder)
             return pp2.gas_flux, pp2.gas_flux_error, pp2.gas_names, pp2.chi2, [1], pp2.component, pp2.sol, pp2.error
 
         f1 = gas_flux1[idx_Ha1]
@@ -658,10 +665,10 @@ class GasKinematicsFitter:
             return gas_flux1, gas_flux_error1, gas_names1, chi21, [1], component1, sol1, error1
  
         # -------------------------- 2-component fit -------------------------
-        pp2 = GasKinematicsFitter._run_ppxf_fit_static(
+        pp2 = GasKinematicsFitter._run_ppxf_fit_static(j,
             template, gas_templates_2, gas_names_2,
             galaxy, noise, goodpixels, True,
-            n_lines, vk, sk, h3k, h4k, velscale, lam_gal, lam_temp)
+            n_lines, vk, sk, h3k, h4k, velscale, lam_gal, lam_temp, outfolder)
         gas_flux2, gas_flux_error2, gas_names2, chi22, component2, sol2, error2, dof2 = pp2.gas_flux, pp2.gas_flux_error, pp2.gas_names, pp2.chi2, pp2.component, pp2.sol, pp2.error, pp2.dof
         del pp2
         BIC2 = GasKinematicsFitter._get_BIC_static(chi22, dof2, len(galaxy))
@@ -767,7 +774,7 @@ class GasKinematicsFitter:
             if len(local_idxs)==0:
                 continue
 
-            f_list=[]; v_list=[]; s_list=[];  ef_list=[]; ev_list=[]; es_list=[]
+            f_list=[]; v_list=[]; s_list=[]; ef_list=[]; ev_list=[]; es_list=[]
 
             for j in local_idxs:
                 comp = int(self.gas_names_all[i][j].split("(")[1].split(")")[0])
@@ -800,7 +807,7 @@ class GasKinematicsFitter:
             ef = np.array(ef_list) #resultado
 
             weight_comp = f/np.sum(f)
-            e_f_tot = np.sqrt(np.sum(ef**2))
+            e_f_tot = np.sqrt(np.sum((weight_comp*ef)**2))
             v_tot = np.sum(weight_comp* v) #resultado
             e_v_tot = np.sqrt(np.sum((weight_comp * ev)**2)) #resultado
 
@@ -835,7 +842,7 @@ class GasKinematicsFitter:
                 self.gas_templates_1, self.gas_names_1,
                 self.gas_templates_2, self.gas_names_2,
                 n_lines, self.velbin, self.sigbin, self.h3, self.h4,
-                self.s.velscale, self.sps.lam_temp, sn_min)
+                self.s.velscale, self.sps.lam_temp, sn_min, self.s.outfolder)
             for j in tqdm(range(N), desc="Fitting gas spaxels"))
  
         # dtype=object: cada spaxel puede tener 1 o 2 componentes activos,
@@ -887,7 +894,7 @@ class GasKinematicsFitter:
         j, galaxy, variance_j, ln_lam_temp, lam_gal,
         bin_num, optimal_templates,
         gas_templates_1, gas_names_1,
-        velbin, sigbin, h3, h4, velscale, lam_temp):
+        velbin, sigbin, h3, h4, velscale, lam_temp, outfolder):
 
         # 1. Extract spectrum & noise
         #galaxy = np.asarray(spectra[:, j], float)
@@ -919,7 +926,10 @@ class GasKinematicsFitter:
         start = [[vk, sk, h3k, h4k], [vk, 50.0]]
         fixed = [[1, 1, 1, 1], [0, 0]]
         gas_comp_flag = np.array(component) > 0
- 
+
+        plot = (j % 100 == 0)
+        plt.figure(figsize=(20, 3))
+
         pp = ppxf(
             templates=np.column_stack([template, gas_templates_1]),
             galaxy=galaxy,
@@ -935,7 +945,13 @@ class GasKinematicsFitter:
             lam=lam_gal,
             lam_temp=lam_temp,
             degree=8, mdegree=0,
-            quiet=True, plot=False)
+            quiet=True, plot=plot)
+
+        if plot:
+            txt = f"pixel {j+1}; Gas fitting"
+            plt.title(txt)
+            plt.savefig(outfolder+"fit_gas_1g/"+f'Gas_fitting_example_{j+1}.png',dpi=250)
+            plt.close()
 
         # 5. Extract flux/err/vel/sigma for EVERY line, right here.
         #    Devolvemos un dict liviano en vez del objeto pp completo.
@@ -974,7 +990,7 @@ class GasKinematicsFitter:
                 self.lam_gal, self.bin_num, self.optimal_templates,
                 self.gas_templates_1, self.gas_names_1,
                 self.velbin, self.sigbin, self.h3, self.h4,
-                self.s.velscale, self.sps.lam_temp
+                self.s.velscale, self.sps.lam_temp, self.s.outfolder
             )
             for j in tqdm(range(len(self.s.x)), desc="1-Gaussian gas fits")
         )
@@ -1073,14 +1089,14 @@ class GasKinematicsFitter:
         # mask_rel = rel_error > max_rel_error
         # mask_dev = deviation_over_error > max_deviation_sigma
         mask_snr = snr < max_snr
-        mask_vel = error_map > min_vel_err 
+        mask_vel = np.abs(error_map) > min_vel_err 
         # mask_sigma = error_sigma > 3
         
         # Combinar todas las condiciones + NaNs
         total_mask = mask_vel | mask_snr
 
         # Aplicar máscara al mapa
-        clipped_map = np.where(total_mask, 0, value_map)
+        clipped_map = np.where(total_mask, np.nan, value_map)
 
         return clipped_map
 
@@ -1121,14 +1137,14 @@ class GasKinematicsFitter:
         mask_snr = snr < max_snr
         # mask_chi2 =  (chi2 > 2)
 
-        mask_vel = error_vel_gas > min_vel_err 
+        mask_vel = np.abs(error_vel_gas) > min_vel_err 
         mask_sigma = error_sigma_gas > min_sigma_err 
         
         # Combinar todas las condiciones + NaNs
-        total_mask = mask_vel  | mask_snr  | mask_sigma 
+        total_mask = mask_vel | (mask_snr | mask_sigma)
 
         # Aplicar máscara al mapa
-        clipped_map = np.where(total_mask, 0, value_map)
+        clipped_map = np.where(total_mask, np.nan, value_map)
         return clipped_map
 
 

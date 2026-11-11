@@ -519,7 +519,6 @@ def ppxf_fit_and_clean(templates, galaxy, noise, velscale, start, mask0, lam, la
     the outliers. The general approach used in this function is described in
     Sec.6.5 of Cappellari (2023) https://ui.adsabs.harvard.edu/abs/2023MNRAS.526.3273C
     """
-    print(velscale)
     mask = mask0.copy()
     pp = ppxf(templates, galaxy, noise, velscale, start,
               moments=4, degree=10, mdegree=-1, lam=lam, lam_temp=lam_temp,
@@ -609,7 +608,6 @@ def cut_cube(filename,ra,dec,size,filename_output):
     # Delete the third axis
     wcs_original = WCS(hdu[1].header)
     wcs = wcs_original.dropaxis(2)
-    print(wcs)
     
     naxis = cube.shape[0] # yaxis sieze 
     cube_cut = []
