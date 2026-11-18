@@ -548,8 +548,8 @@ def ppxf_fit_and_clean(templates, galaxy, noise, velscale, start, mask0, lam, la
     start = [velbin, sigbin]
 
     pp = ppxf(templates, galaxy, noise, velscale, start, fixed = [True,True],
-                moments=2, degree=-1, mdegree=8, lam=lam, lam_temp=lam_temp,
-                mask=mask, quiet=quiet,clean=False)
+                moments=2, degree=-1, mdegree=10, lam=lam, lam_temp=lam_temp,
+                mask=mask, quiet=quiet,clean=False) # modifcar los degree y mdegree para ver los cambios
 
     pp.optimal_template = templates.reshape(templates.shape[0], -1) @ pp.weights
     pp.sol = [velbin, sigbin, h3_a, h4_a]

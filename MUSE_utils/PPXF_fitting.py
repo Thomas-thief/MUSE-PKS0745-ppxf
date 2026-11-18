@@ -190,7 +190,7 @@ class stellar_kinematics:
         #noise = (np.nanmean(s.noise))/np.nanmedian(galaxy_normalized)
         #noise = np.full_like(galaxy_normalized,noise)
         mask = mask0 & np.isfinite(galaxy) & np.isfinite(variance)
-        plot = (j % 200 == 0)
+        plot = (j % 20 == 0)
         pp_stars = ph.ppxf_fit_and_clean(
             sps.templates, 
             galaxy_normalized, 
@@ -572,7 +572,7 @@ class GasKinematicsFitter:
  
         gas_comp_flag = np.array(component) > 0
 
-        plot = (j % 100 == 0)
+        plot = (j % 2 != 0)
         plt.figure(figsize=(20, 3))
         pp = ppxf(
             templates=np.column_stack([template, gas_templates]),
@@ -595,7 +595,6 @@ class GasKinematicsFitter:
             txt = f"pixel {j+1}; Gas fitting"
             plt.title(txt)
             plt.savefig(outfolder+"fit_gas/"+f'Gas_fitting_example_{j+1}.png',dpi=250)
-            plt.close()
         return pp
  
 
@@ -1144,7 +1143,7 @@ class GasKinematicsFitter:
         total_mask = mask_vel | (mask_snr | mask_sigma)
 
         # Aplicar máscara al mapa
-        clipped_map = np.where(total_mask, np.nan, value_map)
+        clipped_map = np.where(total_mask, 0, value_map)
         return clipped_map
 
 
