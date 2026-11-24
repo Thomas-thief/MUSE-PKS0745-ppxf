@@ -388,6 +388,7 @@ class GasKinematicsFitter:
         self._build_templates()
 
         self.name = name
+
         HDU = fits.PrimaryHDU(header=self.s.header)
         HDU.writeto(self.s.outfolder+self.name+".fits", overwrite=True)
 
@@ -830,7 +831,7 @@ class GasKinematicsFitter:
     # ------------------------------------------------------------------
 
     
-    def Fit_cube(self, n_jobs=-1, batch_size=40, max_nbytes="1M", sn_min=45):
+    def Fit_cube(self, n_jobs=-1, batch_size=40, max_nbytes="1M", sn_min=45, dBIC_min=7, frac_min=0.1):
         n_lines = len(self.gas_names_base)
         N = len(self.s.x)
  
@@ -841,7 +842,7 @@ class GasKinematicsFitter:
                 self.gas_templates_1, self.gas_names_1,
                 self.gas_templates_2, self.gas_names_2,
                 n_lines, self.velbin, self.sigbin, self.h3, self.h4,
-                self.s.velscale, self.sps.lam_temp, sn_min, self.s.outfolder)
+                self.s.velscale, self.sps.lam_temp, sn_min, self.s.outfolder, dBIC_min, frac_min)
             for j in tqdm(range(N), desc="Fitting gas spaxels"))
  
         # dtype=object: cada spaxel puede tener 1 o 2 componentes activos,

@@ -6,6 +6,7 @@ from pathlib import Path
 from urllib import request
 
 from time import perf_counter as clock
+import os
 
 from mpdaf.obj import Cube
 
@@ -395,6 +396,18 @@ class read_data_cube:
         if rango_x!=False and rango_y!=False:
             self.cube, self.header = cut_cube_simple(self.cube, self.header, rango_y, rango_x)
             self.cubevar, _ = cut_cube_simple(self.cubevar, self.header, rango_y, rango_x)
+        
+        self.name = filename-".fits"
+        self.outfolder = f"./maps_{self.name}/"
+
+        if not os.path.exists(self.outfolder+"fit_gas/"):
+            os.mkdir(self.outfolder+"fit_gas/")
+
+        if not os.path.exists(self.outfolder+"fit_gas_1g/"):
+            os.mkdir(self.outfolder+"fit_gas_1g/")
+
+        if not os.path.exists(self.outfolder+"fit_stellar/"):
+            os.mkdir(self.outfolder+"fit_stellar/")
 
         # Only use the specified rest-frame wavelength range
         self.redshift = redshift
