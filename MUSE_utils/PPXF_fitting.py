@@ -1042,8 +1042,12 @@ class GasKinematicsFitter:
     # ------------------------------------------------------------------
     # Simple FITS writer
     # ------------------------------------------------------------------
-    def _save_fits(self, datas=None, names_comp=None, name="MUSE_PKS0745_properties"):
-        filepath = self.s.outfolder + name + ".fits"
+    def _save_fits(self, datas=None, names_comp=None, name="MUSE_PKS0745_properties", outfolder = None):
+        if outfolder == None:
+            filepath = self.s.outfolder + name + ".fits"
+        else:
+            filepath = outfolder
+
         if datas is None or names_comp is None:
             return
         
@@ -1078,8 +1082,8 @@ class GasKinematicsFitter:
 
             hdu.flush()
 
-
-    def clip_map_velocity_gas(self, value_map, error_map, ha_clip, ha_err_clip, min_vel_err,max_snr):
+    @staticmethod
+    def clip_map_velocity_gas(value_map, error_map, ha_clip, ha_err_clip, min_vel_err,max_snr):
         # Evitar divisiones por cero
         with np.errstate(divide='ignore', invalid='ignore'):
             snr = np.abs(ha_clip / ha_err_clip)
@@ -1100,8 +1104,8 @@ class GasKinematicsFitter:
 
         return clipped_map
 
-
-    def clip_map_sigma_gas(self, value_map, error_map, ha_clip, ha_err_clip, min_sig_err,max_snr):
+    @staticmethod
+    def clip_map_sigma_gas(value_map, error_map, ha_clip, ha_err_clip, min_sig_err,max_snr):
 
         # Evitar divisiones por cero
         with np.errstate(divide='ignore', invalid='ignore'):
@@ -1124,8 +1128,8 @@ class GasKinematicsFitter:
 
         return clipped_map
 
-
-    def clip_map_flux(self, value_map, error_map, error_vel_gas, min_vel_err, error_sigma_gas, min_sigma_err, max_snr):
+    @staticmethod
+    def clip_map_flux(value_map, error_map, error_vel_gas, min_vel_err, error_sigma_gas, min_sigma_err, max_snr):
 
         # Evitar divisiones por cero
         with np.errstate(divide='ignore', invalid='ignore'):
@@ -1147,13 +1151,32 @@ class GasKinematicsFitter:
         clipped_map = np.where(total_mask, 0, value_map)
         return clipped_map
 
+    @staticmethod
+    def Clip_maps(objeto = True, wave_map = True, use_weighted = ["Halpha"], name_fits_properties="MUSE_PKS0745_properties.fits", min_vel_err=22, min_sigma_err=22, max_snr=10):
+        if wave_map == True and objeto == True:
+            gas_names_global = objeto.gas_names_all[0]
+            wavelength_map = objeto.build_wavelength_map(gas_names_global)
+        else:
+            wavelength_map = wave_map 
+            # USAR PARA CUANDO NO ESTE EL OBJETO CARGADO FIT_GAS
+            #{'Hbeta': np.float64(4861.33297684225), 
+            # 'Halpha': np.float64(6562.8190214441065), 
+            # '[SII]6716': np.float64(6716.439708128853), 
+            # '[SII]6731': np.float64(6730.815840542734), 
+            # 'HeII4687': np.float64(4685.703527762145), 
+            # 'HeI5876': np.float64(5875.614442651756), 
+            # '[NII]5755': np.float64(5753.404160629015), 
+            # '[NI]5198': np.float64(5196.452876247093), 
+            # '[NI]5200': np.float64(5198.812247803875), 
+            # '[OIII]5007_d': np.float64(5006.843330296288), 
+            # '[OI]6300_d': np.float64(6300.297553341503), 
+            # '[NII]6583_d': np.float64(6583.452474108442)}
+        with fits.open(name_fits_properties) as hdu:
+            nx = hdu["chi_2"].header["NAXIS1"]
+            ny = hdu["chi_2"].header["NAXIS2"]
+            chi = np.sqrt(hdu["chi_2"].data.reshape((nx, ny)))
+        #chi = np.sqrt(self.chi_all)
 
-    def Clip_maps(self, use_weighted = ["Halpha"] , name_fits_properties="MUSE_PKS0745_properties.fits", min_vel_err=22, min_sigma_err=22, max_snr=10):
-        gas_names_global = self.gas_names_all[0]
-        wavelength_map = self.build_wavelength_map(gas_names_global)
-        chi = np.sqrt(self.chi_all)
-        nx = self.s.header["NAXIS1"]
-        ny = self.s.header["NAXIS2"]
         for line_name in wavelength_map.keys():
             print(f"\nMap_clipping line: {line_name}")
             if line_name in use_weighted:
@@ -1174,12 +1197,12 @@ class GasKinematicsFitter:
                     sigma = hdu[f"{line_name}_sigma"].data.reshape(np.shape(chi))
                     sigma_err = hdu[f"{line_name}_sigma_err"].data.reshape(np.shape(chi))
 
-            map_gas_clipped = self.clip_map_flux(flux, flux_err*chi, vel_err*chi, min_vel_err, sigma_err*chi, min_sigma_err, max_snr)
-            map_vel_gas_clipped = self.clip_map_velocity_gas(vel, vel_err, flux, flux_err, min_vel_err,max_snr)
-            map_sigma_gas_clipped = self.clip_map_sigma_gas(sigma, sigma_err, flux, flux_err, min_sigma_err,max_snr)
+            map_gas_clipped = GasKinematicsFitter.clip_map_flux(flux, flux_err*chi, vel_err*chi, min_vel_err, sigma_err*chi, min_sigma_err, max_snr)
+            map_vel_gas_clipped = GasKinematicsFitter.clip_map_velocity_gas(vel, vel_err, flux, flux_err, min_vel_err,max_snr)
+            map_sigma_gas_clipped = GasKinematicsFitter.clip_map_sigma_gas(sigma, sigma_err, flux, flux_err, min_sigma_err,max_snr)
 
-            self._save_fits([map_gas_clipped.reshape(nx, ny), map_vel_gas_clipped.reshape(nx, ny),
+            GasKinematicsFitter._save_fits([map_gas_clipped.reshape(nx, ny), map_vel_gas_clipped.reshape(nx, ny),
                               map_sigma_gas_clipped.reshape(nx, ny)], 
                             [f"{line_name}_map_flux_clipped", f"{line_name}_map_vel_clipped",
-                             f"{line_name}_map_sigma_clipped"])
+                             f"{line_name}_map_sigma_clipped"], outfolder=name_fits_properties)
             
